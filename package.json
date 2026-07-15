@@ -1,0 +1,63 @@
+{
+  "name": "cm-tunnel",
+  "version": "1.0.0",
+  "description": "Exponha seu servidor HTTP local para a internet através do Cloudflare ou LocalTunnel de forma simples",
+  "type": "module",
+  "main": "./dist/index.js",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "default": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "rm -rf dist && tsc",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "lint": "tsc --noEmit",
+    "format": "prettier --write \"src/**/*.ts\" \"examples/**/*.ts\" \"tests/**/*.ts\"",
+    "prepublishOnly": "npm run lint && npm run test && npm run build"
+  },
+  "keywords": [
+    "tunnel",
+    "cloudflare",
+    "localtunnel",
+    "ngrok",
+    "expose",
+    "http",
+    "localhost"
+  ],
+  "author": "",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/your-username/cm-tunnel.git"
+  },
+  "bugs": {
+    "url": "https://github.com/your-username/cm-tunnel/issues"
+  },
+  "homepage": "https://github.com/your-username/cm-tunnel#readme",
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "dependencies": {
+    "localtunnel": "^2.0.2"
+  },
+  "devDependencies": {
+    "@types/localtunnel": "^2.0.4",
+    "@types/node": "^20.12.7",
+    "eslint": "^9.1.1",
+    "prettier": "^3.2.5",
+    "tsup": "^8.0.2",
+    "typescript": "^5.4.5",
+    "vitest": "^1.5.0"
+  }
+}
