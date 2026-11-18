@@ -13,7 +13,14 @@ server.listen(PORT, async () => {
   console.log(`Servidor local rodando na porta ${PORT}`);
 
   try {
-    const t = await tunnel({ provider: "cloudflare", port: PORT });
+    const t = await tunnel({
+      provider: 'cloudflare',
+      port: PORT,
+      rateLimit: {
+        maxRequestsPerMinute: 20, // max 20 requests per minute
+        routes: ['/api/'], // only applies to /api/*
+      }
+    });
     console.log(`Túnel público disponível em: ${t.url}`);
 
     t.on("error", (err) => {

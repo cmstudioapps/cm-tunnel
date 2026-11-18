@@ -2,7 +2,10 @@ import tunnel from "../src/index.js";
 
 async function main() {
   try {
-    const t = await tunnel.localtunnel({ port: 8080 });
+    const t = await tunnel.localtunnel({
+      port: 8080,
+      subdomain: "meu-teste-app-123", // Tente usar um subdomínio único
+    });
     console.log(`LocalTunnel rodando em: ${t.url}`);
 
     t.on("close", () => {

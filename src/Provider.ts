@@ -8,9 +8,18 @@ export interface TunnelResult {
   process?: unknown;
 }
 
+export interface ProviderOptions {
+  port: number;
+  subdomain?: string;
+  authtoken?: string;
+  [key: string]: any;
+}
+
 export abstract class Provider extends EventEmitter {
-  constructor(protected port: number) {
+  protected port: number;
+  constructor(protected options: ProviderOptions) {
     super();
+    this.port = options.port;
   }
 
   abstract start(): Promise<TunnelResult>;

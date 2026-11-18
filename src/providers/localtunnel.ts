@@ -1,17 +1,17 @@
 import localtunnel from "localtunnel";
-import { Provider, TunnelResult } from "../Provider.js";
+import { Provider, ProviderOptions, TunnelResult } from "../Provider.js";
 
 export default class LocalTunnelProvider extends Provider {
   private tunnel: localtunnel.Tunnel | null = null;
 
-  constructor(port: number) {
-    super(port);
+  constructor(options: ProviderOptions) {
+    super(options);
   }
 
   start(): Promise<TunnelResult> {
     return new Promise(async (resolve, reject) => {
       try {
-        this.tunnel = await localtunnel({ port: this.port });
+        this.tunnel = await localtunnel({ port: this.port, subdomain: this.options.subdomain });
 
         if (!this.tunnel.url) {
           return reject(new Error("Falha ao obter URL do LocalTunnel."));
