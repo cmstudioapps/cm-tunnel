@@ -1,6 +1,6 @@
 import { EventEmitter } from "events";
 import { Provider, TunnelResult } from "./Provider.js";
-import { RateLimiter, RateLimitOptions } from "./RateLimiter.js";
+import { RateLimiter, RateLimitOptions, ClientIpConfig } from "./RateLimiter.js";
 import { StaticServer, ServeOptions } from "./StaticServer.js";
 import { validateCredentialsFile } from "./providers/cloudflare.js";
 import type { CloudflareMode, CloudflareOptions } from "./providers/cloudflare.js";
@@ -10,7 +10,10 @@ export type { CloudflareMode, CloudflareOptions };
 export interface TunnelOptions {
   provider: string;
   port?: number;
+  /** Subdomínio fixo (localtunnel). */
   subdomain?: string;
+  /** Domínio completo já registrado (ngrok). */
+  domain?: string;
   authtoken?: string;
   rateLimit?: RateLimitOptions | boolean;
   serve?: ServeOptions;
@@ -25,6 +28,35 @@ export interface TunnelInstance extends TunnelResult, EventEmitter {
   on(event: "error", listener: (err: Error) => void): this;
   // Fallback signature
   on(event: string | symbol, listener: (...args: any[]) => void): this;
+}
+
+/**
+ * Cabeçalho confiável para o IP do cliente, conforme o provedor.
+ * - Cloudflare sobrescreve `cf-connecting-ip` na borda.
+ * - LocalTunnel/ngrok anexam o IP real ao final de `x-forwarded-for`.
+ */
+function providerClientIp(providerName: string): ClientIpConfig {
+  if (providerName === "cloudflare") {
+    return { header: "cf-connecting-ip", strategy: "first" };
+  }
+  return { header: "x-forwarded-for", strategy: "last" };
+}
+
+/**
+ * Injeta o `clientIp` adequado ao provedor sem sobrescrever uma escolha
+ * explícita do usuário (inclusive `false`).
+ */
+function withProviderClientIp(
+  rateLimit: RateLimitOptions | true,
+  providerName: string,
+): RateLimitOptions | true {
+  const clientIp = providerClientIp(providerName);
+  if (rateLimit === true) {
+    return { maxRequestsPerMinute: 100, clientIp };
+  }
+  return rateLimit.clientIp === undefined
+    ? { ...rateLimit, clientIp }
+    : rateLimit;
 }
 
 /**
@@ -145,7 +177,10 @@ export async function createTunnel(
     }
 
     if (options.rateLimit) {
-      rateLimiterInstance = new RateLimiter(targetPort, options.rateLimit);
+      rateLimiterInstance = new RateLimiter(
+        targetPort,
+        withProviderClientIp(options.rateLimit, providerName),
+      );
       targetPort = await rateLimiterInstance.start(); // O túnel apontará para o proxy
     }
 

@@ -142,7 +142,7 @@ cm-tunnel
 **Requisitos:**
 
 - Node.js **>= 18.3**
-- `cloudflared` instalado e disponível no `PATH`
+- `cloudflared` **somente** se você usar o provedor Cloudflare (o padrão). Com `--provider localtunnel` ou `--provider ngrok`, ele não é necessário.
 
 **Por que `npx` funciona sem entrar em `node_modules`?**
 
@@ -319,19 +319,24 @@ console.log(t.url);
 
 | Provedor | Flag | Domínio próprio | Observações |
 |---|---|---|---|
-| Cloudflare | `--provider cloudflare` (padrão) | sim | Requer `cloudflared` |
-| localtunnel | `--provider localtunnel` | não | Zero dependências externas |
-| ngrok | `--provider ngrok` | não | Define `NGROK_AUTHTOKEN` |
+| Cloudflare | `--provider cloudflare` (padrão) | sim (`--domain`) | Requer `cloudflared` |
+| localtunnel | `--provider localtunnel` | não | Aceita `--subdomain` (nome curto) |
+| ngrok | `--provider ngrok` | domínio registrado no ngrok | `NGROK_AUTHTOKEN` + `--ngrok-domain` |
 
 ```bash
-# localtunnel com subdomínio fixo
+# localtunnel com subdomínio fixo (nome curto)
 npx cm-tunnel --yes --provider localtunnel --subdomain meuapp
 
 # ngrok (token em NGROK_AUTHTOKEN)
 npx cm-tunnel --yes --provider ngrok
+
+# ngrok com domínio completo já registrado no painel do ngrok
+npx cm-tunnel --yes --provider ngrok --ngrok-domain meuapp.ngrok.app
 ```
 
-> `localtunnel` e `ngrok` só oferecem URL temporária. Se você pedir `--domain`, o CLI avisa e usa URL temporária.
+> `localtunnel` e `ngrok` não usam domínio próprio da Cloudflare. Se você pedir `--domain`, o CLI avisa e usa URL temporária.
+>
+> `--subdomain` vale **só** para localtunnel. O ngrok espera um domínio completo em `--ngrok-domain` — o SDK dele ignora `subdomain`.
 
 ### Domínio próprio: checklist
 
@@ -454,7 +459,8 @@ npx cm-tunnel [opções]
 | `--target <porta>` | Tunelar um servidor que já está rodando |
 | `--port <porta>` | Porta do servidor interno (pastas + domínio) |
 | `--provider <nome>` | `cloudflare` (padrão), `localtunnel` ou `ngrok` |
-| `--subdomain <nome>` | Subdomínio fixo (`localtunnel`/`ngrok`) |
+| `--subdomain <nome>` | Subdomínio fixo (somente `localtunnel`) |
+| `--ngrok-domain <domínio>` | Domínio completo já registrado no ngrok |
 | `--domain <domínio>` | Domínio próprio (somente Cloudflare) |
 | `--token <token>` | Token do túnel (ou use `CLOUDFLARE_TOKEN`/`.env`) |
 | `--quick` | URL temporária, sem configuração |
@@ -490,13 +496,14 @@ npx cm-tunnel --lang en
 # sem Cloudflare (não precisa de cloudflared)
 npx cm-tunnel --yes --provider localtunnel --subdomain meuapp
 npx cm-tunnel --yes --provider ngrok
+npx cm-tunnel --yes --provider ngrok --ngrok-domain meuapp.ngrok.app
 ```
 
 **O que é salvo:**
 
 | Arquivo | Conteúdo |
 |---------|----------|
-| `.cm-tunnel.json` | modo, pastas (ou porta), `apiMode`/`apiEntry`, provedor, subdomínio, domínio (sem token) |
+| `.cm-tunnel.json` | modo, pastas (ou porta), `apiMode`/`apiEntry`, provedor, subdomínio/domínio ngrok, domínio (sem token) |
 | `.env` | `CLOUDFLARE_TOKEN` (permissão `600`) e/ou `NGROK_AUTHTOKEN` |
 
 ---
@@ -693,7 +700,7 @@ O modo pastas já protege por padrão:
 - Symlinks que apontem para fora de `public/` (ou para dentro de `api/`) são bloqueados.
 - O token não vai para `.cm-tunnel.json`; o `.env` é criado com permissão `600`.
 
-O rate limit do modo pastas é aplicado por IP em `/api` (padrão: 60 req/min) quando há API. No modo `--target`, use o rate limit do seu próprio servidor.
+O rate limit do modo pastas é aplicado por IP em `/api` (padrão: 60 req/min) quando há API. O IP vem do cabeçalho confiável do provedor: `cf-connecting-ip` na Cloudflare e o **último** valor de `x-forwarded-for` em localtunnel/ngrok (o primeiro valor é ignorado para não permitir falsificação). No modo `--target`, use o rate limit do seu próprio servidor.
 
 ---
 

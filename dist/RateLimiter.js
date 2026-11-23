@@ -1,4 +1,5 @@
 import http from 'http';
+import net from 'node:net';
 import httpProxy from 'http-proxy';
 import bancoz from 'bancoz';
 /** Tabela do bancoz usada para persistir os contadores. */
@@ -9,6 +10,48 @@ const WINDOW_MS = 60_000;
 const BLOCK_MS = 60_000;
 /** Intervalo entre limpezas de chaves expiradas. */
 const CLEANUP_INTERVAL_MS = 5 * 60_000;
+/** Default seguro: o proxy (túnel) anexa o IP do cliente ao final da lista. */
+const DEFAULT_CLIENT_IP = {
+    header: 'x-forwarded-for',
+    strategy: 'last',
+};
+export function resolveClientIp(headers, remoteAddress, config) {
+    if (config !== false) {
+        const cfg = config ?? DEFAULT_CLIENT_IP;
+        const raw = headers[cfg.header.toLowerCase()];
+        if (raw) {
+            const values = String(raw)
+                .split(',')
+                .map((value) => value.trim())
+                .filter(Boolean);
+            if (values.length > 0) {
+                const value = cfg.strategy === 'first' ? values[0] : values[values.length - 1];
+                const ip = normalizeIp(value);
+                if (ip)
+                    return ip;
+            }
+        }
+    }
+    return normalizeIp(remoteAddress) ?? 'unknown';
+}
+/**
+ * Normaliza e valida um IP. Retorna `null` para valores inválidos
+ * (evita que um cabeçalho forjado vire chave arbitrária).
+ */
+export function normalizeIp(value) {
+    if (!value)
+        return null;
+    let candidate = value.trim().replace(/^"|"$/g, '');
+    // IPv4 com porta: 203.0.113.7:1234
+    const ipv4WithPort = candidate.match(/^(\d{1,3}(?:\.\d{1,3}){3}):\d+$/);
+    if (ipv4WithPort)
+        candidate = ipv4WithPort[1];
+    // IPv6 entre colchetes: [2001:db8::1] ou [2001:db8::1]:443
+    const bracketed = candidate.match(/^\[([^\]]+)\](?::\d+)?$/);
+    if (bracketed)
+        candidate = bracketed[1];
+    return net.isIP(candidate) ? candidate : null;
+}
 /**
  * Normaliza uma rota de configuração: garante barra inicial e remove
  * barra final (exceto para a raiz `/`).
@@ -41,10 +84,18 @@ export class RateLimiter {
     port = 0;
     isGlobal;
     cleanupTimer = null;
+    clientIp;
+    /**
+     * Fila por chave. O bancoz trava cada operação, mas ler e escrever são
+     * operações distintas; sem serializar, requisições simultâneas do mesmo IP
+     * podem ler o mesmo contador e perder incrementos.
+     */
+    locks = new Map();
     constructor(targetPort, options) {
         this.targetPort = targetPort;
         this.options = options;
         this.isGlobal = options === true || !options.routes || options.routes.length === 0;
+        this.clientIp = options === true ? undefined : options.clientIp;
     }
     async start() {
         this.proxy = httpProxy.createProxyServer({
@@ -68,47 +119,14 @@ export class RateLimiter {
                     shouldApplyLimit = this.options.routes.some((route) => pathMatchesRoute(url, route));
                 }
                 if (shouldApplyLimit) {
-                    const ip = req.headers['cf-connecting-ip'] ||
-                        req.headers['x-forwarded-for']?.split(',')[0].trim() ||
-                        req.socket.remoteAddress || 'unknown';
+                    const ip = resolveClientIp(req.headers, req.socket.remoteAddress, this.clientIp);
                     const maxReqs = typeof this.options === 'object' ? this.options.maxRequestsPerMinute : 100;
-                    // Lógica de Rate Limit com Bancoz
-                    const key = ip.replace(/[^a-zA-Z0-9_-]/g, '_'); // Sanitizar chave para o bancoz
-                    let data = {};
-                    try {
-                        data = (await bancoz.ler(TABLE, key)) || {};
-                    }
-                    catch (err) {
-                        // Se não existe, ignora e cria
-                    }
-                    const now = Date.now();
-                    if (data.blockedUntil && data.blockedUntil > now) {
+                    // Sanitizar chave para o bancoz.
+                    const key = ip.replace(/[^a-zA-Z0-9_-]/g, '_');
+                    const result = await this.withKeyLock(key, () => this.consume(key, maxReqs));
+                    if (!result.allowed) {
                         res.writeHead(429, { 'Content-Type': 'text/plain' });
-                        return res.end('Too Many Requests. IP Bloqueado Temporariamente.');
-                    }
-                    if (!data.count || !data.windowStart || (now - data.windowStart > WINDOW_MS)) {
-                        // Nova janela de tempo
-                        await bancoz.criar(TABLE, key, {
-                            count: 1,
-                            windowStart: now
-                        });
-                    }
-                    else {
-                        // Incrementa contador
-                        const newCount = data.count + 1;
-                        if (newCount > maxReqs) {
-                            // Bloquear por 1 minuto
-                            await bancoz.atualizar(TABLE, key, {
-                                blockedUntil: now + BLOCK_MS
-                            });
-                            res.writeHead(429, { 'Content-Type': 'text/plain' });
-                            return res.end('Too Many Requests. Limite Excedido.');
-                        }
-                        else {
-                            await bancoz.atualizar(TABLE, key, {
-                                count: newCount
-                            });
-                        }
+                        return res.end(result.message);
                     }
                 }
                 // Repassar a requisição
@@ -140,6 +158,59 @@ export class RateLimiter {
         });
     }
     /**
+     * Serializa operações por chave para que leitura + incremento sejam
+     * atômicos dentro deste processo.
+     */
+    async withKeyLock(key, fn) {
+        const previous = this.locks.get(key) ?? Promise.resolve();
+        let release;
+        const current = new Promise((resolve) => {
+            release = resolve;
+        });
+        this.locks.set(key, current);
+        await previous;
+        try {
+            return await fn();
+        }
+        finally {
+            release();
+            if (this.locks.get(key) === current) {
+                this.locks.delete(key);
+            }
+        }
+    }
+    /** Lê, incrementa e (se preciso) bloqueia, tudo sob a mesma chave. */
+    async consume(key, maxReqs) {
+        let data = {};
+        try {
+            data = (await bancoz.ler(TABLE, key)) || {};
+        }
+        catch {
+            // Se não existe, ignora e cria
+        }
+        const now = Date.now();
+        if (data.blockedUntil && data.blockedUntil > now) {
+            return {
+                allowed: false,
+                message: 'Too Many Requests. IP Bloqueado Temporariamente.',
+            };
+        }
+        if (!data.count || !data.windowStart || now - data.windowStart > WINDOW_MS) {
+            await bancoz.criar(TABLE, key, { count: 1, windowStart: now });
+            return { allowed: true };
+        }
+        const newCount = data.count + 1;
+        if (newCount > maxReqs) {
+            await bancoz.atualizar(TABLE, key, { blockedUntil: now + BLOCK_MS });
+            return {
+                allowed: false,
+                message: 'Too Many Requests. Limite Excedido.',
+            };
+        }
+        await bancoz.atualizar(TABLE, key, { count: newCount });
+        return { allowed: true };
+    }
+    /**
      * Remove entradas cuja janela e bloqueio já expiraram.
      * Retorna a quantidade de chaves removidas.
      */
@@ -155,16 +226,30 @@ export class RateLimiter {
         if (!entries || typeof entries !== 'object')
             return 0;
         let removed = 0;
-        for (const [key, entry] of Object.entries(entries)) {
-            if (!this.isExpired(entry, now))
-                continue;
-            try {
-                await bancoz.deletar(TABLE, key);
+        for (const key of Object.keys(entries)) {
+            const deleted = await this.withKeyLock(key, async () => {
+                // Reconfere dentro do lock para não apagar uma entrada que acabou
+                // de receber atividade.
+                let current = null;
+                try {
+                    current = (await bancoz.ler(TABLE, key));
+                }
+                catch {
+                    return false;
+                }
+                if (!this.isExpired(current, now))
+                    return false;
+                try {
+                    await bancoz.deletar(TABLE, key);
+                    return true;
+                }
+                catch {
+                    // Chave pode ter sido removida concorrentemente; segue adiante.
+                    return false;
+                }
+            });
+            if (deleted)
                 removed++;
-            }
-            catch {
-                // Chave pode ter sido removida concorrentemente; segue adiante.
-            }
         }
         return removed;
     }

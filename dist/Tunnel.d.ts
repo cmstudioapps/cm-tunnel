@@ -7,7 +7,10 @@ export type { CloudflareMode, CloudflareOptions };
 export interface TunnelOptions {
     provider: string;
     port?: number;
+    /** Subdomínio fixo (localtunnel). */
     subdomain?: string;
+    /** Domínio completo já registrado (ngrok). */
+    domain?: string;
     authtoken?: string;
     rateLimit?: RateLimitOptions | boolean;
     serve?: ServeOptions;

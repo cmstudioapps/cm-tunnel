@@ -3,6 +3,30 @@ import { RateLimiter } from "./RateLimiter.js";
 import { StaticServer } from "./StaticServer.js";
 import { validateCredentialsFile } from "./providers/cloudflare.js";
 /**
+ * Cabeçalho confiável para o IP do cliente, conforme o provedor.
+ * - Cloudflare sobrescreve `cf-connecting-ip` na borda.
+ * - LocalTunnel/ngrok anexam o IP real ao final de `x-forwarded-for`.
+ */
+function providerClientIp(providerName) {
+    if (providerName === "cloudflare") {
+        return { header: "cf-connecting-ip", strategy: "first" };
+    }
+    return { header: "x-forwarded-for", strategy: "last" };
+}
+/**
+ * Injeta o `clientIp` adequado ao provedor sem sobrescrever uma escolha
+ * explícita do usuário (inclusive `false`).
+ */
+function withProviderClientIp(rateLimit, providerName) {
+    const clientIp = providerClientIp(providerName);
+    if (rateLimit === true) {
+        return { maxRequestsPerMinute: 100, clientIp };
+    }
+    return rateLimit.clientIp === undefined
+        ? { ...rateLimit, clientIp }
+        : rateLimit;
+}
+/**
  * Determina o modo efetivo do Cloudflare com base nas opções.
  */
 function resolveCloudflareMode(cf) {
@@ -91,7 +115,7 @@ export async function createTunnel(options) {
             targetPort = serveResult.port; // O túnel ou proxy apontará para o StaticServer
         }
         if (options.rateLimit) {
-            rateLimiterInstance = new RateLimiter(targetPort, options.rateLimit);
+            rateLimiterInstance = new RateLimiter(targetPort, withProviderClientIp(options.rateLimit, providerName));
             targetPort = await rateLimiterInstance.start(); // O túnel apontará para o proxy
         }
         const providerInstance = new ProviderClass({ ...options, port: targetPort });

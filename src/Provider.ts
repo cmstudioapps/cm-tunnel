@@ -11,6 +11,11 @@ export interface TunnelResult {
 export interface ProviderOptions {
   port: number;
   subdomain?: string;
+  /**
+   * Domínio completo já registrado (ngrok). Não use `subdomain` para ngrok:
+   * o SDK espera um domínio/hostname completo.
+   */
+  domain?: string;
   authtoken?: string;
   [key: string]: any;
 }

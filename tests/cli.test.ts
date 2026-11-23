@@ -100,15 +100,18 @@ describe("CLI — parse de flags", () => {
     );
   });
 
-  it("aceita --provider e --subdomain", () => {
+  it("aceita --provider, --subdomain e --ngrok-domain", () => {
     const opts = parseCliArgs([
       "--provider",
       "ngrok",
       "--subdomain",
       "meuapp",
+      "--ngrok-domain",
+      "meuapp.ngrok.app",
     ]);
     expect(opts.provider).toBe("ngrok");
     expect(opts.subdomain).toBe("meuapp");
+    expect(opts.ngrokDomain).toBe("meuapp.ngrok.app");
   });
 
   it("rejeita --provider inválido", () => {
@@ -263,15 +266,16 @@ describe("CLI — opções do túnel", () => {
     expect(options.cloudflare).toEqual({ mode: "quick" });
   });
 
-  it("monta ngrok com authtoken e subdomínio", () => {
+  it("monta ngrok com authtoken e domínio registrado", () => {
     const options = buildTunnelOptions(
-      { ...base, provider: "ngrok", subdomain: "meuapp" },
+      { ...base, provider: "ngrok", ngrokDomain: "meuapp.ngrok.app" },
       undefined,
       "ngrok-token",
     );
 
     expect(options.provider).toBe("ngrok");
-    expect(options.subdomain).toBe("meuapp");
+    expect(options.domain).toBe("meuapp.ngrok.app");
+    expect(options.subdomain).toBeUndefined();
     expect(options.authtoken).toBe("ngrok-token");
     expect(options.cloudflare).toBeUndefined();
     expect(options.serve).toEqual({
@@ -279,6 +283,29 @@ describe("CLI — opções do túnel", () => {
       api: "api",
       apiPrefix: "/api",
     });
+  });
+
+  it("não repassa subdomain para ngrok (SDK ignora e espera domain)", () => {
+    const options = buildTunnelOptions({
+      ...base,
+      provider: "ngrok",
+      subdomain: "meuapp",
+    });
+
+    expect(options.subdomain).toBeUndefined();
+    expect(options.domain).toBeUndefined();
+  });
+
+  it("repassa subdomain para localtunnel", () => {
+    const options = buildTunnelOptions({
+      ...base,
+      provider: "localtunnel",
+      subdomain: "meuapp",
+    });
+
+    expect(options.provider).toBe("localtunnel");
+    expect(options.subdomain).toBe("meuapp");
+    expect(options.domain).toBeUndefined();
   });
 
   it("monta localtunnel sem credenciais da Cloudflare", () => {

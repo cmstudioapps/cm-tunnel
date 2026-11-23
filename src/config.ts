@@ -74,6 +74,8 @@ export function loadConfig(): Plan | null {
           ? data.provider
           : 'cloudflare',
       subdomain: typeof data.subdomain === 'string' ? data.subdomain : undefined,
+      ngrokDomain:
+        typeof data.ngrokDomain === 'string' ? data.ngrokDomain : undefined,
       target: typeof data.target === 'number' ? data.target : undefined,
       port: typeof data.port === 'number' ? data.port : undefined,
     };

@@ -12,7 +12,13 @@ export default class NgrokProvider extends Provider {
                 if (this.options.authtoken) {
                     ngrok.authtoken(this.options.authtoken);
                 }
-                this.listener = await ngrok.forward({ addr: this.port, authtoken: this.options.authtoken, domain: this.options.subdomain });
+                this.listener = await ngrok.forward({
+                    addr: this.port,
+                    authtoken: this.options.authtoken,
+                    // `domain` é o nome correto no SDK (pode ser ngrok.app ou domínio
+                    // customizado já registrado). `subdomain` está marcado como unused.
+                    domain: this.options.domain,
+                });
                 this.url = this.listener.url() || null;
                 if (!this.url) {
                     return reject(new Error('Falha ao obter URL do Ngrok.'));

@@ -204,13 +204,17 @@ Em `startApiServer` (delega para `spawnApiProcess`):
 ## 6. `RateLimiter`
 
 - Sobe um `http.Server` em porta aleatória e um `http-proxy` para o alvo.
-- IP: `cf-connecting-ip` → `x-forwarded-for` (primeiro) → `remoteAddress`.
+- **IP do cliente** (`resolveClientIp`):
+  - `Tunnel.ts` injeta o cabeçalho confiável conforme o provedor: Cloudflare → `cf-connecting-ip`; localtunnel/ngrok → `x-forwarded-for` com `strategy: 'last'` (ignora o primeiro valor, que o cliente pode forjar).
+  - O valor é validado com `net.isIP`; inválido cai para `socket.remoteAddress`.
+  - `clientIp: false` usa só o socket; uma escolha explícita do usuário nunca é sobrescrita.
 - Se `routes` vazio ou `true`: aplica globalmente. Caso contrário, `pathMatchesRoute(url, route)` compara **segmentos** (`/api` casa `/api` e `/api/x`, mas não `/api2`).
 - Janela de 60 s; ao exceder `maxRequestsPerMinute`, bloqueia por 60 s (429).
+- **Atomicidade:** ler e escrever no `bancoz` são operações separadas; `withKeyLock` serializa **por chave** para não perder incrementos sob concorrência. (Vale para um processo; múltiplos processos no mesmo `BANCO Z` ainda podem disputar.)
 - Persistência via `bancoz` (chave sanitizada do IP, tabela `ratelimit`).
-- `cleanupExpired()` remove entradas com janela e bloqueio vencidos; roda a cada **5 min** (`setInterval(...).unref()`) e no `stop()`.
+- `cleanupExpired()` remove entradas com janela e bloqueio vencidos; roda a cada **5 min** (`setInterval(...).unref()`) e no `stop()`. A remoção também é feita sob o lock e reconfere a entrada.
 - WebSocket: `upgrade` é proxiado.
-- Testes em `tests/rate-limiter.test.ts`.
+- Testes em `tests/rate-limiter.test.ts` (inclui concorrência e falsificação de IP).
 
 ---
 
@@ -256,7 +260,8 @@ Em `startApiServer` (delega para `spawnApiProcess`):
 13. Define publish (quick/domain), domínio, token e porta.
     - Provedor ≠ `cloudflare` sempre usa URL temporária; `--domain`/`--token` apenas avisam.
     - Token Cloudflare: `--token` → `CLOUDFLARE_TOKEN` → `.env` → prompt.
-    - ngrok: `NGROK_AUTHTOKEN` (ou aviso se ausente).
+    - ngrok: `NGROK_AUTHTOKEN`; domínio completo via `--ngrok-domain` (o SDK ignora `subdomain`).
+    - `--subdomain` só é usado por localtunnel.
     - Token digitado é salvo em `.env` com `chmod 600` (se `--save`).
     - Porta em domínio: checa se está livre (pastas) ou se o servidor responde (`target`).
 14. Imprime resumo e confirma.
@@ -323,7 +328,8 @@ Verifica Node, `cloudflared` (somente se o provedor for Cloudflare), config, tok
 - `target` substitui `public`/`api` (modo servidor existente).
 - `apiMode`/`apiEntry` só fazem sentido sem `target`.
 - `provider` ausente é tratado como `cloudflare` (retrocompatível).
-- `subdomain` só é usado por `localtunnel`/`ngrok`.
+- `subdomain` só é usado por `localtunnel`.
+- `ngrokDomain` (domínio completo) só é usado por `ngrok`.
 - `.env` guarda `CLOUDFLARE_TOKEN` e/ou `NGROK_AUTHTOKEN`; nunca vão para o JSON.
 - Token em texto puro no `.env` (proteção por permissão `600`).
 
@@ -351,7 +357,7 @@ Limites:
 
 ## 12. Testes
 
-- **112 testes** (31 CLI, 22 serve, 49 tunnel, 10 rate-limiter).
+- **127 testes** (33 CLI, 22 serve, 49 tunnel, 23 rate-limiter).
 - `vitest.config.ts` exclui `.remote` (clone temporário de manutenção).
 - `child_process` é mockado nos testes de provider; não há teste real contra o `cloudflared`.
 - Fixtures de API em `tests/fixtures/api` e `tests/fixtures/api-server`.
@@ -382,7 +388,7 @@ Lacunas de teste:
 
 ```bash
 git status                    # limpo
-npm run prepublishOnly        # lint + 112 testes + check:self + build
+npm run prepublishOnly        # lint + 127 testes + check:self + build
 npm pack --dry-run            # confira 31 arquivos, sem tests/src/.env
 npm version patch             # quando aplicável
 npx --yes npm@11 publish      # npm 9.2 travava no fluxo web de 2FA
@@ -483,6 +489,7 @@ Siga o checklist da seção 13. Nunca rode `npm install cm-tunnel` dentro deste 
 | `npx cm-tunnel` não acha comando | Versão antiga/publicação | `package.json bin`, npm |
 | 404 na API | Rota/arquivo/prefixo/environment errado | `StaticServer.handleApi`, `apiPrefix` |
 | 502 no modo server | App morreu ou não está escutando | `startApiServer`, `--logs` |
+| ngrok recusa o domínio | `--subdomain` (ignorado) ou domínio não registrado no ngrok | use `--ngrok-domain <dominio.ngrok.app>` |
 | Publish npm travando | 2FA `auth-and-writes` + web auth do npm 9 | use `npm@11`/`--otp` (não é bug do código) |
 
 ---
@@ -499,6 +506,9 @@ Siga o checklist da seção 13. Nunca rode `npm install cm-tunnel` dentro deste 
 - **`dist/` versionado**: decisão consciente para uso via Git; o publish também o inclui.
 - **`check:self`**: incidente real de self-dependency; bloqueia no `prepublishOnly`.
 - **Match por segmento no rate limit**: `startsWith` casava `/api2` com `/api`; agora compara `/api` e `/api/...`.
+- **IP confiável por provedor**: confiar em `cf-connecting-ip` fora da Cloudflare (ou no primeiro `x-forwarded-for`) permitia falsificação; cada provedor define o cabeçalho e a estratégia.
+- **Lock por chave no rate limit**: `bancoz` trava cada operação, mas leitura e escrita são separadas; sem serializar por chave, requisições simultâneas do mesmo IP perdiam incrementos.
+- **ngrok usa `domain`**: o SDK marca `subdomain` como unused e espera um domínio completo; `--subdomain` ficou restrito ao localtunnel.
 - **Limpeza periódica do bancoz**: sem TTL nativo, então `cleanupExpired()` varre a tabela e apaga entradas vencidas (5 min + no `stop()`).
 - **Supervisor com backoff e teto de saúde**: 5 tentativas, 500 ms → 30 s; 60 s no ar zera o contador para não desistir de quedas esporádicas ao longo do dia.
 - **Provedor no CLI**: `localtunnel`/`ngrok` não têm domínio próprio; o CLI força URL temporária em vez de falhar tarde no provider.

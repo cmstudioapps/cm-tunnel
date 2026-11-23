@@ -34,6 +34,8 @@ export const STRINGS = {
         summaryPublishQuickWith: (provider) => `Modo:  URL temporária (${provider})`,
         providerQuickOnly: (provider) => `${provider} não suporta domínio próprio; usando URL temporária.`,
         ngrokTokenMissing: "Aviso: NGROK_AUTHTOKEN não definido. O ngrok pode exigir um authtoken (https://dashboard.ngrok.com/get-started/your-authtoken).",
+        ngrokSubdomainIgnored: "Aviso: --subdomain só vale para localtunnel. Para ngrok use --ngrok-domain <dominio-registrado> (ex.: meuapp.ngrok.app).",
+        summaryNgrokDomain: (domain) => `Domínio ngrok: ${domain}`,
         summarySite: (dir) => `Site:  ${dir}`,
         summaryApi: (dir, prefix) => `API:   ${dir} em ${prefix}`,
         summaryApiServer: (dir, entry) => `API:   ${dir} (servidor: ${entry})`,
@@ -133,6 +135,8 @@ export const STRINGS = {
         summaryPublishQuickWith: (provider) => `Mode:  Temporary URL (${provider})`,
         providerQuickOnly: (provider) => `${provider} does not support custom domains; using a temporary URL.`,
         ngrokTokenMissing: "Warning: NGROK_AUTHTOKEN is not set. ngrok may require an authtoken (https://dashboard.ngrok.com/get-started/your-authtoken).",
+        ngrokSubdomainIgnored: "Warning: --subdomain only applies to localtunnel. For ngrok use --ngrok-domain <registered-domain> (e.g. myapp.ngrok.app).",
+        summaryNgrokDomain: (domain) => `ngrok domain: ${domain}`,
         summarySite: (dir) => `Site:  ${dir}`,
         summaryApi: (dir, prefix) => `API:   ${dir} at ${prefix}`,
         summaryApiServer: (dir, entry) => `API:   ${dir} (server: ${entry})`,
@@ -220,7 +224,8 @@ Opções:
   --target <porta>         Tunelar um servidor que já está rodando
   --port <porta>           Porta local (modo pastas + domínio)
   --provider <nome>        cloudflare | localtunnel | ngrok (padrão: cloudflare)
-  --subdomain <nome>       Subdomínio fixo (localtunnel/ngrok)
+  --subdomain <nome>       Subdomínio fixo (somente localtunnel)
+  --ngrok-domain <dominio> Domínio completo registrado no ngrok
   --domain <dominio>       Domínio próprio (somente Cloudflare)
   --token <token>          Token do túnel Cloudflare
   --quick                  URL temporária, sem configuração
@@ -251,7 +256,8 @@ Options:
   --target <port>          Tunnel an already running server
   --port <port>            Local port (folders + domain mode)
   --provider <name>        cloudflare | localtunnel | ngrok (default: cloudflare)
-  --subdomain <name>       Fixed subdomain (localtunnel/ngrok)
+  --subdomain <name>       Fixed subdomain (localtunnel only)
+  --ngrok-domain <domain>  Full domain registered with ngrok
   --domain <domain>        Custom domain (Cloudflare only)
   --token <token>          Cloudflare tunnel token
   --quick                  Temporary URL, no setup
@@ -293,6 +299,7 @@ export function parseCliArgs(argv) {
             token: { type: "string" },
             provider: { type: "string" },
             subdomain: { type: "string" },
+            "ngrok-domain": { type: "string" },
             quick: { type: "boolean" },
             "no-save": { type: "boolean" },
         },
@@ -348,6 +355,7 @@ export function parseCliArgs(argv) {
         token: values.token,
         provider: provider,
         subdomain: values.subdomain,
+        ngrokDomain: values["ngrok-domain"],
         quick: !!values.quick,
         save: !values["no-save"],
     };
@@ -388,13 +396,18 @@ export function buildTunnelOptions(plan, token, ngrokToken) {
             token,
         };
     const applyProviderOptions = (options) => {
-        if (plan.subdomain)
+        if (provider === "localtunnel" && plan.subdomain) {
             options.subdomain = plan.subdomain;
+        }
         if (provider === "cloudflare") {
             options.cloudflare = cloudflare;
         }
-        else if (provider === "ngrok" && ngrokToken) {
-            options.authtoken = ngrokToken;
+        else if (provider === "ngrok") {
+            if (ngrokToken)
+                options.authtoken = ngrokToken;
+            // ngrok espera domínio completo; `subdomain` é ignorado pelo SDK.
+            if (plan.ngrokDomain)
+                options.domain = plan.ngrokDomain;
         }
         return options;
     };

@@ -25,8 +25,10 @@ export interface CliOptions {
     token?: string;
     /** Provedor do túnel (padrão: cloudflare) */
     provider?: ProviderName;
-    /** Subdomínio fixo para localtunnel/ngrok */
+    /** Subdomínio fixo para localtunnel */
     subdomain?: string;
+    /** Domínio completo já registrado no ngrok (ex.: meuapp.ngrok.app) */
+    ngrokDomain?: string;
     quick: boolean;
     save: boolean;
 }
@@ -43,8 +45,10 @@ export interface Plan {
     domain?: string;
     /** Provedor do túnel escolhido */
     provider?: ProviderName;
-    /** Subdomínio fixo (localtunnel/ngrok) */
+    /** Subdomínio fixo (localtunnel) */
     subdomain?: string;
+    /** Domínio completo registrado no ngrok */
+    ngrokDomain?: string;
     /** Porta de um servidor que já está rodando (modo proxy). */
     target?: number;
     /** Porta do servidor interno (modo pastas + domínio). */
@@ -84,6 +88,8 @@ export interface Strings {
     summaryPublishQuickWith: (provider: string) => string;
     providerQuickOnly: (provider: string) => string;
     ngrokTokenMissing: string;
+    ngrokSubdomainIgnored: string;
+    summaryNgrokDomain: (domain: string) => string;
     summarySite: (dir: string) => string;
     summaryApi: (dir: string, prefix: string) => string;
     summaryApiServer: (dir: string, entry: string) => string;

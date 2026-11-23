@@ -251,12 +251,24 @@ async function main(): Promise<void> {
 
   const provider: ProviderName =
     opts.provider ?? saved?.provider ?? "cloudflare";
-  const subdomain = opts.subdomain ?? saved?.subdomain;
+  const subdomain =
+    provider === "localtunnel" ? opts.subdomain ?? saved?.subdomain : undefined;
+  const rawNgrokDomain =
+    provider === "ngrok" ? opts.ngrokDomain ?? saved?.ngrokDomain : undefined;
+  const ngrokDomain = rawNgrokDomain
+    ? normalizeDomain(rawNgrokDomain)
+    : undefined;
   const ngrokToken =
     provider === "ngrok" ? process.env.NGROK_AUTHTOKEN || undefined : undefined;
 
+  if (provider === "ngrok" && (opts.subdomain || saved?.subdomain)) {
+    console.warn(s.ngrokSubdomainIgnored);
+  }
   if (provider === "ngrok" && !ngrokToken) {
     console.warn(s.ngrokTokenMissing);
+  }
+  if (ngrokDomain && !isValidDomain(ngrokDomain)) {
+    throw new Error(s.invalidDomain);
   }
 
   if (provider === "cloudflare") {
@@ -482,6 +494,7 @@ async function main(): Promise<void> {
     domain,
     provider,
     subdomain,
+    ngrokDomain,
     target,
     port,
   };
@@ -512,6 +525,9 @@ async function main(): Promise<void> {
         : s.summaryPublishDomain(domain!)
     }`,
   );
+  if (ngrokDomain) {
+    console.log(`  ${s.summaryNgrokDomain(ngrokDomain)}`);
+  }
   if (publish === "domain" && port && !target) {
     console.log(`  ${s.summaryPort(port)}`);
   }
