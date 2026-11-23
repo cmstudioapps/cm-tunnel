@@ -37,12 +37,12 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/your-username/cm-tunnel.git"
+    "url": "git+https://github.com/cmstudioapps/cm-tunnel.git"
   },
   "bugs": {
-    "url": "https://github.com/your-username/cm-tunnel/issues"
+    "url": "https://github.com/cmstudioapps/cm-tunnel/issues"
   },
-  "homepage": "https://github.com/your-username/cm-tunnel#readme",
+  "homepage": "https://github.com/cmstudioapps/cm-tunnel#readme",
   "engines": {
     "node": ">=18.3.0"
   },
