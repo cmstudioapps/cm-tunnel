@@ -31,6 +31,9 @@ export const STRINGS = {
         portInUse: (port) => `A porta ${port} já está em uso. Escolha outra com --port.`,
         missingToken: "Token ausente. Defina CLOUDFLARE_TOKEN, use --token ou rode de forma interativa.",
         summaryTitle: "Resumo:",
+        summaryPublishQuickWith: (provider) => `Modo:  URL temporária (${provider})`,
+        providerQuickOnly: (provider) => `${provider} não suporta domínio próprio; usando URL temporária.`,
+        ngrokTokenMissing: "Aviso: NGROK_AUTHTOKEN não definido. O ngrok pode exigir um authtoken (https://dashboard.ngrok.com/get-started/your-authtoken).",
         summarySite: (dir) => `Site:  ${dir}`,
         summaryApi: (dir, prefix) => `API:   ${dir} em ${prefix}`,
         summaryApiServer: (dir, entry) => `API:   ${dir} (servidor: ${entry})`,
@@ -86,6 +89,7 @@ export const STRINGS = {
         dashboardModeBothServer: "Site + API (servidor)",
         dashboardModeTarget: (port) => `Servidor http://localhost:${port}`,
         dashboardPublishQuick: "URL temporária",
+        dashboardPublishQuickWith: (provider) => `URL temporária (${provider})`,
         dashboardPublishDomain: (domain) => `Domínio ${domain}`,
         dashboardLocal: (value) => `Local: ${value}`,
         dashboardAwaitingLocal: "Local: aguardando...",
@@ -126,6 +130,9 @@ export const STRINGS = {
         portInUse: (port) => `Port ${port} is already in use. Choose another with --port.`,
         missingToken: "Missing token. Set CLOUDFLARE_TOKEN, pass --token, or run interactively.",
         summaryTitle: "Summary:",
+        summaryPublishQuickWith: (provider) => `Mode:  Temporary URL (${provider})`,
+        providerQuickOnly: (provider) => `${provider} does not support custom domains; using a temporary URL.`,
+        ngrokTokenMissing: "Warning: NGROK_AUTHTOKEN is not set. ngrok may require an authtoken (https://dashboard.ngrok.com/get-started/your-authtoken).",
         summarySite: (dir) => `Site:  ${dir}`,
         summaryApi: (dir, prefix) => `API:   ${dir} at ${prefix}`,
         summaryApiServer: (dir, entry) => `API:   ${dir} (server: ${entry})`,
@@ -181,6 +188,7 @@ export const STRINGS = {
         dashboardModeBothServer: "Site + API (server)",
         dashboardModeTarget: (port) => `Server http://localhost:${port}`,
         dashboardPublishQuick: "Temporary URL",
+        dashboardPublishQuickWith: (provider) => `Temporary URL (${provider})`,
         dashboardPublishDomain: (domain) => `Domain ${domain}`,
         dashboardLocal: (value) => `Local: ${value}`,
         dashboardAwaitingLocal: "Local: waiting...",
@@ -211,7 +219,9 @@ Opções:
   --api-prefix <prefixo>   Prefixo da API (padrão: /api)
   --target <porta>         Tunelar um servidor que já está rodando
   --port <porta>           Porta local (modo pastas + domínio)
-  --domain <dominio>       Domínio próprio
+  --provider <nome>        cloudflare | localtunnel | ngrok (padrão: cloudflare)
+  --subdomain <nome>       Subdomínio fixo (localtunnel/ngrok)
+  --domain <dominio>       Domínio próprio (somente Cloudflare)
   --token <token>          Token do túnel Cloudflare
   --quick                  URL temporária, sem configuração
   --yes, -y                Não perguntar (usa flags/padrões)
@@ -224,7 +234,6 @@ Opções:
     en: `cm-tunnel — publish a site (public) and an API (api) in minutes
 
 Usage:
-  Uso:
   npx cm-tunnel                 # interactive
   npx cm-tunnel --yes --quick   # no questions
 
@@ -241,7 +250,9 @@ Options:
   --api-prefix <prefix>    API prefix (default: /api)
   --target <port>          Tunnel an already running server
   --port <port>            Local port (folders + domain mode)
-  --domain <domain>        Custom domain
+  --provider <name>        cloudflare | localtunnel | ngrok (default: cloudflare)
+  --subdomain <name>       Fixed subdomain (localtunnel/ngrok)
+  --domain <domain>        Custom domain (Cloudflare only)
   --token <token>          Cloudflare tunnel token
   --quick                  Temporary URL, no setup
   --yes, -y                Do not ask (use flags/defaults)
@@ -280,6 +291,8 @@ export function parseCliArgs(argv) {
             port: { type: "string" },
             domain: { type: "string" },
             token: { type: "string" },
+            provider: { type: "string" },
+            subdomain: { type: "string" },
             quick: { type: "boolean" },
             "no-save": { type: "boolean" },
         },
@@ -304,6 +317,13 @@ export function parseCliArgs(argv) {
     if (apiMode !== undefined && apiMode !== "handlers" && apiMode !== "server") {
         throw new Error(`Invalid --api-mode: "${apiMode}". Use handlers or server.`);
     }
+    const provider = values.provider;
+    if (provider !== undefined &&
+        provider !== "cloudflare" &&
+        provider !== "localtunnel" &&
+        provider !== "ngrok") {
+        throw new Error(`Invalid --provider: "${provider}". Use cloudflare, localtunnel or ngrok.`);
+    }
     const command = positionals[0];
     if (command !== undefined && command !== "doctor" && command !== "dashboard") {
         throw new Error(`Unknown command: "${command}". Use doctor or dashboard.`);
@@ -326,6 +346,8 @@ export function parseCliArgs(argv) {
         port,
         domain: values.domain,
         token: values.token,
+        provider: provider,
+        subdomain: values.subdomain,
         quick: !!values.quick,
         save: !values["no-save"],
     };
@@ -356,7 +378,8 @@ export function guessMode(publicExists, apiExists) {
         return "api";
     return "both";
 }
-export function buildTunnelOptions(plan, token) {
+export function buildTunnelOptions(plan, token, ngrokToken) {
+    const provider = plan.provider ?? "cloudflare";
     const cloudflare = plan.publish === "quick"
         ? { mode: "quick" }
         : {
@@ -364,13 +387,20 @@ export function buildTunnelOptions(plan, token) {
             domain: plan.domain,
             token,
         };
+    const applyProviderOptions = (options) => {
+        if (plan.subdomain)
+            options.subdomain = plan.subdomain;
+        if (provider === "cloudflare") {
+            options.cloudflare = cloudflare;
+        }
+        else if (provider === "ngrok" && ngrokToken) {
+            options.authtoken = ngrokToken;
+        }
+        return options;
+    };
     // Modo servidor: apenas aponta o túnel para a porta já existente.
     if (plan.target) {
-        return {
-            provider: "cloudflare",
-            port: plan.target,
-            cloudflare,
-        };
+        return applyProviderOptions({ provider, port: plan.target });
     }
     const serve = {
         apiPrefix: plan.apiPrefix,
@@ -386,7 +416,7 @@ export function buildTunnelOptions(plan, token) {
     if (plan.publish === "domain" && plan.port)
         serve.port = plan.port;
     const options = {
-        provider: "cloudflare",
+        provider,
         serve,
     };
     if (plan.mode !== "site") {
@@ -395,6 +425,5 @@ export function buildTunnelOptions(plan, token) {
             routes: [plan.apiPrefix],
         };
     }
-    options.cloudflare = cloudflare;
-    return options;
+    return applyProviderOptions(options);
 }

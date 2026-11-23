@@ -99,6 +99,23 @@ describe("CLI — parse de flags", () => {
       "Invalid --api-mode",
     );
   });
+
+  it("aceita --provider e --subdomain", () => {
+    const opts = parseCliArgs([
+      "--provider",
+      "ngrok",
+      "--subdomain",
+      "meuapp",
+    ]);
+    expect(opts.provider).toBe("ngrok");
+    expect(opts.subdomain).toBe("meuapp");
+  });
+
+  it("rejeita --provider inválido", () => {
+    expect(() => parseCliArgs(["--provider", "vercel"])).toThrow(
+      "Invalid --provider",
+    );
+  });
 });
 
 describe("CLI — normalização", () => {
@@ -238,5 +255,57 @@ describe("CLI — opções do túnel", () => {
       apiEntry: "api/index.js",
       apiPrefix: "/api",
     });
+  });
+
+  it("usa cloudflare por padrão quando o provedor não é informado", () => {
+    const options = buildTunnelOptions(base);
+    expect(options.provider).toBe("cloudflare");
+    expect(options.cloudflare).toEqual({ mode: "quick" });
+  });
+
+  it("monta ngrok com authtoken e subdomínio", () => {
+    const options = buildTunnelOptions(
+      { ...base, provider: "ngrok", subdomain: "meuapp" },
+      undefined,
+      "ngrok-token",
+    );
+
+    expect(options.provider).toBe("ngrok");
+    expect(options.subdomain).toBe("meuapp");
+    expect(options.authtoken).toBe("ngrok-token");
+    expect(options.cloudflare).toBeUndefined();
+    expect(options.serve).toEqual({
+      public: "public",
+      api: "api",
+      apiPrefix: "/api",
+    });
+  });
+
+  it("monta localtunnel sem credenciais da Cloudflare", () => {
+    const options = buildTunnelOptions({
+      ...base,
+      provider: "localtunnel",
+      publish: "quick",
+    });
+
+    expect(options.provider).toBe("localtunnel");
+    expect(options.cloudflare).toBeUndefined();
+    expect(options.subdomain).toBeUndefined();
+    expect(options.authtoken).toBeUndefined();
+    expect(options.rateLimit).toEqual({
+      maxRequestsPerMinute: 60,
+      routes: ["/api"],
+    });
+  });
+
+  it("monta provedor não-cloudflare em modo servidor existente", () => {
+    const options = buildTunnelOptions({
+      ...base,
+      provider: "localtunnel",
+      publish: "quick",
+      target: 4000,
+    });
+
+    expect(options).toEqual({ provider: "localtunnel", port: 4000 });
   });
 });

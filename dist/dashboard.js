@@ -34,8 +34,12 @@ function modeLabel(plan, s) {
         : s.dashboardModeBoth;
 }
 function publishLabel(plan, s) {
-    if (plan.publish === 'quick')
-        return s.dashboardPublishQuick;
+    if (plan.publish === 'quick') {
+        const provider = plan.provider ?? 'cloudflare';
+        return provider === 'cloudflare'
+            ? s.dashboardPublishQuick
+            : s.dashboardPublishQuickWith(provider);
+    }
     return s.dashboardPublishDomain(plan.domain ?? '?');
 }
 export class Dashboard {

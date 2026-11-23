@@ -69,6 +69,11 @@ export function loadConfig(): Plan | null {
         typeof data.apiPrefix === 'string' ? normalizePrefix(data.apiPrefix) : '/api',
       publish: data.publish,
       domain: typeof data.domain === 'string' ? data.domain : undefined,
+      provider:
+        data.provider === 'localtunnel' || data.provider === 'ngrok'
+          ? data.provider
+          : 'cloudflare',
+      subdomain: typeof data.subdomain === 'string' ? data.subdomain : undefined,
       target: typeof data.target === 'number' ? data.target : undefined,
       port: typeof data.port === 'number' ? data.port : undefined,
     };

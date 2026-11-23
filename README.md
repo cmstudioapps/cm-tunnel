@@ -5,8 +5,9 @@
 Sem Express, sem configurar servidor: aponte as pastas `public` e `api` (ou uma porta existente), responda poucas perguntas e pronto.
 
 - CLI interativo em **português e inglês**
-- **Cloudflare Quick Tunnel** (URL na hora) ou **domínio próprio**
+- **Cloudflare** (quick ou domínio próprio), **localtunnel** e **ngrok**
 - Pasta `api/` roda no servidor e **nunca** é exposta como arquivo
+- Reinício automático da API (modo `server`) com backoff
 - Funciona com Node.js puro, sem framework
 
 ---
@@ -40,11 +41,18 @@ Sem Express, sem configurar servidor: aponte as pastas `public` e `api` (ou uma 
 
 ```bash
 node -v               # precisa ser >= 18.3
-cloudflared --version # precisa existir no PATH
+```
+
+Para o provedor **Cloudflare** (padrão), o `cloudflared` também precisa existir no PATH:
+
+```bash
+cloudflared --version
 ```
 
 Se não tiver o `cloudflared`:
 [instalar cloudflared](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/)
+
+> Usando `--provider localtunnel` ou `--provider ngrok`, o `cloudflared` não é necessário.
 
 **Rode:**
 
@@ -219,6 +227,7 @@ O que a lib faz:
 - serve `public/` normalmente
 - encaminha `/api/*` para o app, removendo o prefixo
 - espera o app responder antes de subir o túnel
+- reinicia o app automaticamente se ele cair (backoff de 500 ms a 30 s, até 5 tentativas; zera após 60 s no ar)
 - encerra o app no `Ctrl+C`
 
 Exemplo de `api/index.js`:
@@ -243,6 +252,8 @@ GET /api/users  →  app recebe /users
 ```
 
 > O app precisa escutar em `process.env.PORT`. Se ele já usa uma porta fixa, use o modo `--target <porta>`.
+
+Se a API cair depois de subir, o supervisor reinicia o processo automaticamente. Desative com `apiRestart: false` (ou `apiRestartMaxAttempts: 0`) e ajuste as tentativas com `apiRestartMaxAttempts`.
 
 **Equivalente em código:**
 
@@ -303,6 +314,24 @@ console.log(t.url);
 | **Estável entre reinícios** | não | sim |
 | **Indicado para** | testes, demos, uso rápido | produção, API pública |
 | **Ativa no CLI** | `--quick` | `--domain seu.dominio.com` |
+
+### Provedores de túnel
+
+| Provedor | Flag | Domínio próprio | Observações |
+|---|---|---|---|
+| Cloudflare | `--provider cloudflare` (padrão) | sim | Requer `cloudflared` |
+| localtunnel | `--provider localtunnel` | não | Zero dependências externas |
+| ngrok | `--provider ngrok` | não | Define `NGROK_AUTHTOKEN` |
+
+```bash
+# localtunnel com subdomínio fixo
+npx cm-tunnel --yes --provider localtunnel --subdomain meuapp
+
+# ngrok (token em NGROK_AUTHTOKEN)
+npx cm-tunnel --yes --provider ngrok
+```
+
+> `localtunnel` e `ngrok` só oferecem URL temporária. Se você pedir `--domain`, o CLI avisa e usa URL temporária.
 
 ### Domínio próprio: checklist
 
@@ -424,7 +453,9 @@ npx cm-tunnel [opções]
 | `--api-prefix <prefixo>` | Prefixo da API (padrão: `/api`) |
 | `--target <porta>` | Tunelar um servidor que já está rodando |
 | `--port <porta>` | Porta do servidor interno (pastas + domínio) |
-| `--domain <domínio>` | Domínio próprio |
+| `--provider <nome>` | `cloudflare` (padrão), `localtunnel` ou `ngrok` |
+| `--subdomain <nome>` | Subdomínio fixo (`localtunnel`/`ngrok`) |
+| `--domain <domínio>` | Domínio próprio (somente Cloudflare) |
 | `--token <token>` | Token do túnel (ou use `CLOUDFLARE_TOKEN`/`.env`) |
 | `--quick` | URL temporária, sem configuração |
 | `--yes`, `-y` | Não perguntar (usa flags/padrões) |
@@ -455,14 +486,18 @@ npx cm-tunnel --dry-run
 
 # inglês
 npx cm-tunnel --lang en
+
+# sem Cloudflare (não precisa de cloudflared)
+npx cm-tunnel --yes --provider localtunnel --subdomain meuapp
+npx cm-tunnel --yes --provider ngrok
 ```
 
 **O que é salvo:**
 
 | Arquivo | Conteúdo |
 |---------|----------|
-| `.cm-tunnel.json` | modo, pastas (ou porta), `apiMode`/`apiEntry`, domínio (sem token) |
-| `.env` | `CLOUDFLARE_TOKEN` (permissão `600`) |
+| `.cm-tunnel.json` | modo, pastas (ou porta), `apiMode`/`apiEntry`, provedor, subdomínio, domínio (sem token) |
+| `.env` | `CLOUDFLARE_TOKEN` (permissão `600`) e/ou `NGROK_AUTHTOKEN` |
 
 ---
 
@@ -626,6 +661,8 @@ console.log(local.url); // http://127.0.0.1:<porta>
 | `apiEntry` | `string` | `<api>/index.js` | Arquivo de entrada no modo `server` |
 | `stripApiPrefix` | `boolean` | `true` | Remove `/api` antes de encaminhar ao servidor |
 | `apiTimeout` | `number` | `30000` | Tempo para o servidor ficar pronto |
+| `apiRestart` | `boolean` | `true` | Reinicia a API se o processo cair (modo `server`) |
+| `apiRestartMaxAttempts` | `number` | `5` | Tentativas consecutivas antes de desistir |
 | `onLog` | `(line: string) => void` | — | Recebe logs do servidor de API |
 | `apiPrefix` | `string` | `'/api'` | Prefixo das rotas de API |
 | `html` | `string` | — | HTML fixo para rotas não-API (prioridade sobre `public`) |

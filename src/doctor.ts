@@ -7,10 +7,15 @@ import { STRINGS, type Lang, type Plan } from './cli-utils.js';
 import { isPortFree, isPortInUse } from './net-utils.js';
 
 function describePlan(plan: Plan): string {
+  const provider = plan.provider ?? 'cloudflare';
   if (plan.target) {
-    return `server=${plan.target}, publish=${plan.publish}`;
+    return `server=${plan.target}, publish=${plan.publish}, provider=${provider}`;
   }
-  const parts = [`mode=${plan.mode}`, `publish=${plan.publish}`];
+  const parts = [
+    `mode=${plan.mode}`,
+    `publish=${plan.publish}`,
+    `provider=${provider}`,
+  ];
   if (plan.publish === 'domain') {
     parts.push(`domain=${plan.domain ?? '?'}`, `port=${plan.port ?? '?'}`);
   }
@@ -45,22 +50,25 @@ export async function runDoctor(lang: Lang): Promise<number> {
     failLine(s.doctorNodeFail(process.versions.node));
   }
 
-  const cloudflared = spawnSync('cloudflared', ['--version'], {
-    encoding: 'utf8',
-    timeout: 10000,
-  });
-
-  if (!cloudflared.error && cloudflared.status === 0) {
-    const version =
-      (cloudflared.stdout || cloudflared.stderr || '').split(/\r?\n/)[0].trim() ||
-      'ok';
-    okLine(s.doctorCloudflaredOk(version));
-  } else {
-    failLine(s.doctorCloudflaredFail);
-  }
-
   loadDotEnv();
   const plan = loadConfig();
+  const provider = plan?.provider ?? 'cloudflare';
+
+  if (provider === 'cloudflare') {
+    const cloudflared = spawnSync('cloudflared', ['--version'], {
+      encoding: 'utf8',
+      timeout: 10000,
+    });
+
+    if (!cloudflared.error && cloudflared.status === 0) {
+      const version =
+        (cloudflared.stdout || cloudflared.stderr || '').split(/\r?\n/)[0].trim() ||
+        'ok';
+      okLine(s.doctorCloudflaredOk(version));
+    } else {
+      failLine(s.doctorCloudflaredFail);
+    }
+  }
 
   if (!plan) {
     if (existsSync(resolve(CONFIG_FILE))) {

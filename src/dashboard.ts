@@ -36,7 +36,12 @@ function modeLabel(plan: Plan, s: (typeof STRINGS)[Lang]): string {
 }
 
 function publishLabel(plan: Plan, s: (typeof STRINGS)[Lang]): string {
-  if (plan.publish === 'quick') return s.dashboardPublishQuick;
+  if (plan.publish === 'quick') {
+    const provider = plan.provider ?? 'cloudflare';
+    return provider === 'cloudflare'
+      ? s.dashboardPublishQuick
+      : s.dashboardPublishQuickWith(provider);
+  }
   return s.dashboardPublishDomain(plan.domain ?? '?');
 }
 

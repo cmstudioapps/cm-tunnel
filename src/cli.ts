@@ -34,6 +34,7 @@ import {
   parseCliArgs,
   type Lang,
   type Plan,
+  type ProviderName,
   type PublishMode,
   type Strings,
 } from "./cli-utils.js";
@@ -240,17 +241,29 @@ async function main(): Promise<void> {
     throw new Error(s.needTty);
   }
 
-  const check = spawnSync("cloudflared", ["--version"], { stdio: "ignore" });
-  if (check.error) {
-    throw new Error(s.cloudflaredMissing);
-  }
-
   loadDotEnv();
 
   let saved = loadConfig();
   if (saved) {
     const useSaved = opts.yes || (await askConfirm(s, s.useSaved, true));
     if (!useSaved) saved = null;
+  }
+
+  const provider: ProviderName =
+    opts.provider ?? saved?.provider ?? "cloudflare";
+  const subdomain = opts.subdomain ?? saved?.subdomain;
+  const ngrokToken =
+    provider === "ngrok" ? process.env.NGROK_AUTHTOKEN || undefined : undefined;
+
+  if (provider === "ngrok" && !ngrokToken) {
+    console.warn(s.ngrokTokenMissing);
+  }
+
+  if (provider === "cloudflare") {
+    const check = spawnSync("cloudflared", ["--version"], { stdio: "ignore" });
+    if (check.error) {
+      throw new Error(s.cloudflaredMissing);
+    }
   }
 
   const defaultPublic = opts.public ?? saved?.public ?? "public";
@@ -380,7 +393,12 @@ async function main(): Promise<void> {
   }
 
   let publish: PublishMode;
-  if (opts.quick) {
+  if (provider !== "cloudflare") {
+    if (opts.domain || opts.token || saved?.publish === "domain") {
+      console.warn(s.providerQuickOnly(provider));
+    }
+    publish = "quick";
+  } else if (opts.quick) {
     publish = "quick";
   } else if (opts.domain || opts.token) {
     publish = "domain";
@@ -462,6 +480,8 @@ async function main(): Promise<void> {
     apiPrefix: normalizePrefix(opts.apiPrefix ?? saved?.apiPrefix),
     publish,
     domain,
+    provider,
+    subdomain,
     target,
     port,
   };
@@ -486,7 +506,9 @@ async function main(): Promise<void> {
   console.log(
     `  ${
       publish === "quick"
-        ? s.summaryPublishQuick
+        ? provider === "cloudflare"
+          ? s.summaryPublishQuick
+          : s.summaryPublishQuickWith(provider)
         : s.summaryPublishDomain(domain!)
     }`,
   );
@@ -513,7 +535,7 @@ async function main(): Promise<void> {
     console.log(s.dashboardNoTty);
   }
 
-  const tunnelOptions = buildTunnelOptions(plan, token);
+  const tunnelOptions = buildTunnelOptions(plan, token, ngrokToken);
   if (wantLogs) {
     const logSink = (chunk: string) => {
       if (dashboard) {

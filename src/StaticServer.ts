@@ -37,6 +37,13 @@ export interface ServeOptions {
   port?: number;
   /** Recebe logs do servidor de API quando apiMode = "server" */
   onLog?: (line: string) => void;
+  /**
+   * Reinicia a API automaticamente se o processo cair depois de ficar pronto
+   * (padrão: true, apenas em `apiMode: "server"`).
+   */
+  apiRestart?: boolean;
+  /** Máximo de tentativas consecutivas de reinício (padrão: 5) */
+  apiRestartMaxAttempts?: number;
 }
 
 type DecoratedResponse = http.ServerResponse & {
@@ -57,6 +64,12 @@ interface HandlerLookup {
 }
 
 const API_EXTENSIONS = ['.js', '.mjs', '.cjs'];
+
+/** Backoff do supervisor de API. */
+const API_RESTART_BASE_DELAY_MS = 500;
+const API_RESTART_MAX_DELAY_MS = 30_000;
+/** Tempo que a API precisa ficar no ar para zerar o contador de tentativas. */
+const API_HEALTHY_RESET_MS = 60_000;
 
 const MIME_TYPES: Record<string, string> = {
   '.html': 'text/html; charset=utf-8',
@@ -151,6 +164,12 @@ export class StaticServer {
   private apiProxy: httpProxy | null = null;
   private apiPort: number | null = null;
   private stopping = false;
+  private apiReady = false;
+  private apiRestartEnabled: boolean;
+  private apiRestartMaxAttempts: number;
+  private apiRestartAttempts = 0;
+  private apiRestartTimer: NodeJS.Timeout | null = null;
+  private apiHealthyTimer: NodeJS.Timeout | null = null;
   private moduleCache = new Map<string, { mtimeMs: number; module: any }>();
 
   public port: number = 0;
@@ -167,6 +186,8 @@ export class StaticServer {
 
     this.apiMode = options.apiMode === 'server' ? 'server' : 'handlers';
     this.stripApiPrefix = options.stripApiPrefix !== false;
+    this.apiRestartEnabled = options.apiRestart !== false;
+    this.apiRestartMaxAttempts = Math.max(0, options.apiRestartMaxAttempts ?? 5);
 
     if (this.apiMode === 'server') {
       this.apiEntry = options.apiEntry
@@ -202,7 +223,84 @@ export class StaticServer {
     }
   }
 
-  private async startApiServer(): Promise<void> {
+  private createApiProxy(port: number): httpProxy {
+    const proxy = httpProxy.createProxyServer({
+      target: `http://127.0.0.1:${port}`,
+      ws: true,
+    });
+
+    proxy.on('error', (_err, _req, res) => {
+      const response = res as http.ServerResponse | undefined;
+      if (response && typeof response.writeHead === 'function' && !response.headersSent) {
+        response.writeHead(502, {
+          'Content-Type': 'application/json; charset=utf-8',
+        });
+        response.end(JSON.stringify({ error: 'Bad Gateway' }));
+      }
+    });
+
+    return proxy;
+  }
+
+  /**
+   * Encerra apenas o processo/proxy da API, sem marcar o servidor como parado.
+   * Usado durante reinícios automáticos.
+   */
+  private teardownApi(): void {
+    if (this.apiProxy) {
+      try {
+        this.apiProxy.close();
+      } catch {
+        // ignora
+      }
+      this.apiProxy = null;
+    }
+
+    if (this.apiProcess) {
+      try {
+        this.apiProcess.kill();
+      } catch {
+        // ignora
+      }
+      this.apiProcess = null;
+    }
+
+    if (this.apiHealthyTimer) {
+      clearTimeout(this.apiHealthyTimer);
+      this.apiHealthyTimer = null;
+    }
+
+    this.apiPort = null;
+    this.apiReady = false;
+  }
+
+  private logSupervisor(message: string): void {
+    console.error(message);
+    this.options.onLog?.(`${message}\n`);
+  }
+
+  /**
+   * Inicia o processo da API. Em reinícios, falhas não são fatais: o supervisor
+   * agenda uma nova tentativa com backoff.
+   */
+  private async startApiServer(isRestart = false): Promise<void> {
+    try {
+      await this.spawnApiProcess(isRestart);
+    } catch (err) {
+      if (!isRestart) {
+        this.stopApiServer();
+        throw err;
+      }
+
+      this.teardownApi();
+      if (this.stopping) return;
+
+      const message = err instanceof Error ? err.message : String(err);
+      this.scheduleApiRestart('Falha ao reiniciar a API:', message);
+    }
+  }
+
+  private async spawnApiProcess(isRestart: boolean): Promise<void> {
     if (!this.apiEntry) {
       throw new Error('apiMode "server" requer um arquivo de entrada.');
     }
@@ -223,7 +321,6 @@ export class StaticServer {
     this.apiProcess = child;
     let output = '';
     let exited = false;
-    let ready = false;
     let exitInfo = '';
 
     const forward = (data: Buffer) => {
@@ -237,11 +334,18 @@ export class StaticServer {
     child.once('exit', (code, signal) => {
       exited = true;
       exitInfo = code !== null ? `código ${code}` : `sinal ${signal}`;
-      if (!this.stopping && ready) {
-        console.error(
-          `[cm-tunnel] A API encerrou inesperadamente (${exitInfo}).`,
-        );
-      }
+
+      // Só reage à saída do processo atual (não de um já substituído).
+      const wasCurrent = this.apiProcess === child;
+      if (!wasCurrent) return;
+      this.apiProcess = null;
+
+      // Saída esperada (stop/kill) ou API que nunca chegou a ficar pronta:
+      // o loop de prontidão abaixo trata o erro.
+      if (this.stopping || !this.apiReady) return;
+
+      this.teardownApi();
+      this.scheduleApiRestart('A API encerrou inesperadamente:', exitInfo);
     });
 
     const timeoutMs = this.options.apiTimeout ?? 30000;
@@ -249,7 +353,6 @@ export class StaticServer {
 
     while (Date.now() < deadline) {
       if (exited) {
-        this.stopApiServer();
         throw new Error(
           `API encerrou antes de ficar pronta (${exitInfo || 'sem código'}).\n` +
             'O arquivo de entrada precisa iniciar um servidor HTTP em process.env.PORT ' +
@@ -260,29 +363,19 @@ export class StaticServer {
       }
 
       if (await isPortInUse(port)) {
-        this.apiProxy = httpProxy.createProxyServer({
-          target: `http://127.0.0.1:${port}`,
-          ws: true,
-        });
+        this.apiProxy = this.createApiProxy(port);
+        this.apiReady = true;
+        this.scheduleApiHealthyReset();
 
-        this.apiProxy.on('error', (_err, _req, res) => {
-          const response = res as http.ServerResponse | undefined;
-          if (response && typeof response.writeHead === 'function' && !response.headersSent) {
-            response.writeHead(502, {
-              'Content-Type': 'application/json; charset=utf-8',
-            });
-            response.end(JSON.stringify({ error: 'Bad Gateway' }));
-          }
-        });
-
-        ready = true;
+        if (isRestart) {
+          this.logSupervisor('[cm-tunnel] API reiniciada com sucesso.');
+        }
         return;
       }
 
       await new Promise((resolveWait) => setTimeout(resolveWait, 100));
     }
 
-    this.stopApiServer();
     throw new Error(
       `API não ficou pronta em ${timeoutMs / 1000}s. ` +
         'Verifique se o entry chama app.listen(process.env.PORT).' +
@@ -290,28 +383,66 @@ export class StaticServer {
     );
   }
 
+  /**
+   * Zera o contador de tentativas quando a API se mantém saudável tempo
+   * suficiente, para não desistir de reinícios pontuais ao longo do dia.
+   */
+  private scheduleApiHealthyReset(): void {
+    if (this.apiHealthyTimer) clearTimeout(this.apiHealthyTimer);
+    this.apiHealthyTimer = setTimeout(() => {
+      this.apiHealthyTimer = null;
+      this.apiRestartAttempts = 0;
+    }, API_HEALTHY_RESET_MS);
+    this.apiHealthyTimer.unref?.();
+  }
+
+  private scheduleApiRestart(reason: string, detail = ''): void {
+    if (this.stopping) return;
+
+    const suffix = detail ? ` ${detail}` : '';
+
+    if (!this.apiRestartEnabled) {
+      this.logSupervisor(
+        `[cm-tunnel] ${reason}${suffix} Reinício automático desativado.`,
+      );
+      return;
+    }
+
+    if (this.apiRestartAttempts >= this.apiRestartMaxAttempts) {
+      this.logSupervisor(
+        `[cm-tunnel] ${reason}${suffix} Limite de ${this.apiRestartMaxAttempts} ` +
+          'reinícios atingido; a API ficará fora do ar.',
+      );
+      return;
+    }
+
+    this.apiRestartAttempts += 1;
+    const delay = Math.min(
+      API_RESTART_BASE_DELAY_MS * 2 ** (this.apiRestartAttempts - 1),
+      API_RESTART_MAX_DELAY_MS,
+    );
+
+    this.logSupervisor(
+      `[cm-tunnel] ${reason}${suffix} Reiniciando em ${delay}ms ` +
+        `(tentativa ${this.apiRestartAttempts}/${this.apiRestartMaxAttempts}).`,
+    );
+
+    this.apiRestartTimer = setTimeout(() => {
+      this.apiRestartTimer = null;
+      if (this.stopping) return;
+      void this.startApiServer(true);
+    }, delay);
+  }
+
   private stopApiServer(): void {
     this.stopping = true;
 
-    if (this.apiProxy) {
-      try {
-        this.apiProxy.close();
-      } catch {
-        // ignora
-      }
-      this.apiProxy = null;
+    if (this.apiRestartTimer) {
+      clearTimeout(this.apiRestartTimer);
+      this.apiRestartTimer = null;
     }
 
-    if (this.apiProcess) {
-      try {
-        this.apiProcess.kill();
-      } catch {
-        // ignora
-      }
-      this.apiProcess = null;
-    }
-
-    this.apiPort = null;
+    this.teardownApi();
   }
 
   private rewriteApiUrl(url: string): string {
@@ -334,6 +465,7 @@ export class StaticServer {
   }
 
   public async start(): Promise<{ port: number; url: string; stop: () => void }> {
+    this.stopping = false;
     this.prepareRoots();
 
     if (this.apiMode === 'server') {

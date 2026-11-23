@@ -142,16 +142,24 @@ async function main() {
     if (!process.stdin.isTTY && !opts.yes) {
         throw new Error(s.needTty);
     }
-    const check = spawnSync("cloudflared", ["--version"], { stdio: "ignore" });
-    if (check.error) {
-        throw new Error(s.cloudflaredMissing);
-    }
     loadDotEnv();
     let saved = loadConfig();
     if (saved) {
         const useSaved = opts.yes || (await askConfirm(s, s.useSaved, true));
         if (!useSaved)
             saved = null;
+    }
+    const provider = opts.provider ?? saved?.provider ?? "cloudflare";
+    const subdomain = opts.subdomain ?? saved?.subdomain;
+    const ngrokToken = provider === "ngrok" ? process.env.NGROK_AUTHTOKEN || undefined : undefined;
+    if (provider === "ngrok" && !ngrokToken) {
+        console.warn(s.ngrokTokenMissing);
+    }
+    if (provider === "cloudflare") {
+        const check = spawnSync("cloudflared", ["--version"], { stdio: "ignore" });
+        if (check.error) {
+            throw new Error(s.cloudflaredMissing);
+        }
     }
     const defaultPublic = opts.public ?? saved?.public ?? "public";
     const defaultApi = opts.api ?? saved?.api ?? "api";
@@ -240,7 +248,13 @@ async function main() {
         throw new Error(s.apiEntryInvalid(apiEntry));
     }
     let publish;
-    if (opts.quick) {
+    if (provider !== "cloudflare") {
+        if (opts.domain || opts.token || saved?.publish === "domain") {
+            console.warn(s.providerQuickOnly(provider));
+        }
+        publish = "quick";
+    }
+    else if (opts.quick) {
         publish = "quick";
     }
     else if (opts.domain || opts.token) {
@@ -311,6 +325,8 @@ async function main() {
         apiPrefix: normalizePrefix(opts.apiPrefix ?? saved?.apiPrefix),
         publish,
         domain,
+        provider,
+        subdomain,
         target,
         port,
     };
@@ -329,7 +345,9 @@ async function main() {
         }
     }
     console.log(`  ${publish === "quick"
-        ? s.summaryPublishQuick
+        ? provider === "cloudflare"
+            ? s.summaryPublishQuick
+            : s.summaryPublishQuickWith(provider)
         : s.summaryPublishDomain(domain)}`);
     if (publish === "domain" && port && !target) {
         console.log(`  ${s.summaryPort(port)}`);
@@ -349,7 +367,7 @@ async function main() {
     if (opts.command === "dashboard" && !process.stdout.isTTY) {
         console.log(s.dashboardNoTty);
     }
-    const tunnelOptions = buildTunnelOptions(plan, token);
+    const tunnelOptions = buildTunnelOptions(plan, token, ngrokToken);
     if (wantLogs) {
         const logSink = (chunk) => {
             if (dashboard) {

@@ -4,6 +4,7 @@ export type Lang = "pt" | "en";
 export type Mode = "site" | "api" | "both";
 export type PublishMode = "quick" | "domain";
 export type Command = "doctor" | "dashboard";
+export type ProviderName = "cloudflare" | "localtunnel" | "ngrok";
 export interface CliOptions {
     command?: Command;
     lang?: Lang;
@@ -22,6 +23,10 @@ export interface CliOptions {
     port?: number;
     domain?: string;
     token?: string;
+    /** Provedor do túnel (padrão: cloudflare) */
+    provider?: ProviderName;
+    /** Subdomínio fixo para localtunnel/ngrok */
+    subdomain?: string;
     quick: boolean;
     save: boolean;
 }
@@ -36,6 +41,10 @@ export interface Plan {
     apiPrefix: string;
     publish: PublishMode;
     domain?: string;
+    /** Provedor do túnel escolhido */
+    provider?: ProviderName;
+    /** Subdomínio fixo (localtunnel/ngrok) */
+    subdomain?: string;
     /** Porta de um servidor que já está rodando (modo proxy). */
     target?: number;
     /** Porta do servidor interno (modo pastas + domínio). */
@@ -72,6 +81,9 @@ export interface Strings {
     portInUse: (port: number) => string;
     missingToken: string;
     summaryTitle: string;
+    summaryPublishQuickWith: (provider: string) => string;
+    providerQuickOnly: (provider: string) => string;
+    ngrokTokenMissing: string;
     summarySite: (dir: string) => string;
     summaryApi: (dir: string, prefix: string) => string;
     summaryApiServer: (dir: string, entry: string) => string;
@@ -127,6 +139,7 @@ export interface Strings {
     dashboardModeBothServer: string;
     dashboardModeTarget: (port: number) => string;
     dashboardPublishQuick: string;
+    dashboardPublishQuickWith: (provider: string) => string;
     dashboardPublishDomain: (domain: string) => string;
     dashboardLocal: (value: string) => string;
     dashboardAwaitingLocal: string;
@@ -145,4 +158,4 @@ export declare function normalizeDomain(input: string): string;
 export declare function isValidDomain(domain: string): boolean;
 export declare function normalizePrefix(input?: string): string;
 export declare function guessMode(publicExists: boolean, apiExists: boolean): Mode;
-export declare function buildTunnelOptions(plan: Plan, token?: string): TunnelOptions;
+export declare function buildTunnelOptions(plan: Plan, token?: string, ngrokToken?: string): TunnelOptions;

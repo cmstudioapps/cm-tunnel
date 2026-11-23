@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeAll, afterAll } from "vitest";
 import { fileURLToPath } from "url";
 import { join } from "path";
 import { writeFileSync, rmSync } from "fs";
+import { tmpdir } from "os";
 import http from "http";
 import tunnel from "../src/index.js";
 
@@ -50,6 +51,18 @@ function request(
     req.on("error", reject);
     req.end();
   });
+}
+
+async function waitFor(
+  predicate: () => boolean,
+  timeoutMs = 5000,
+): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (predicate()) return;
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+  throw new Error("Timeout aguardando condição");
 }
 
 async function withServer<T>(
@@ -266,6 +279,100 @@ describe("StaticServer — API em modo server", () => {
         /API encerrou antes de ficar pronta[\s\S]*apiMode: "handlers"/,
       );
     } finally {
+      spy.mockRestore();
+    }
+  });
+});
+
+describe("StaticServer — supervisão da API", () => {
+  function markerPath(): string {
+    return join(tmpdir(), `cm-tunnel-crash-${process.pid}-${Date.now()}`);
+  }
+
+  it("reinicia a API após uma queda inesperada", async () => {
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const marker = markerPath();
+    const logs: string[] = [];
+    process.env.CM_TUNNEL_CRASH_MARKER = marker;
+
+    const server = await tunnel.serve({
+      api: apiServerDir,
+      apiMode: "server",
+      apiEntry: join(apiServerDir, "crash.js"),
+      onLog: (line) => logs.push(line),
+      apiTimeout: 5000,
+    });
+
+    try {
+      await waitFor(
+        () => logs.join("").includes("API reiniciada com sucesso"),
+        8000,
+      );
+
+      const res = await request(server.url, "/api/hello");
+      expect(res.status).toBe(200);
+      expect(JSON.parse(res.body).restarted).toBe(true);
+    } finally {
+      server.stop();
+      delete process.env.CM_TUNNEL_CRASH_MARKER;
+      rmSync(marker, { force: true });
+      spy.mockRestore();
+    }
+  });
+
+  it("não reinicia depois de stop()", async () => {
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const marker = markerPath();
+    const logs: string[] = [];
+    process.env.CM_TUNNEL_CRASH_MARKER = marker;
+
+    const server = await tunnel.serve({
+      api: apiServerDir,
+      apiMode: "server",
+      apiEntry: join(apiServerDir, "crash.js"),
+      onLog: (line) => logs.push(line),
+      apiTimeout: 5000,
+    });
+
+    try {
+      server.stop();
+      await new Promise((resolve) => setTimeout(resolve, 1500));
+      expect(logs.join("")).not.toContain("Reiniciando em");
+    } finally {
+      delete process.env.CM_TUNNEL_CRASH_MARKER;
+      rmSync(marker, { force: true });
+      spy.mockRestore();
+    }
+  });
+
+  it("não reinicia quando apiRestart = false", async () => {
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const marker = markerPath();
+    const logs: string[] = [];
+    process.env.CM_TUNNEL_CRASH_MARKER = marker;
+
+    const server = await tunnel.serve({
+      api: apiServerDir,
+      apiMode: "server",
+      apiEntry: join(apiServerDir, "crash.js"),
+      apiRestart: false,
+      onLog: (line) => logs.push(line),
+      apiTimeout: 5000,
+    });
+
+    try {
+      await waitFor(
+        () => logs.join("").includes("Reinício automático desativado"),
+        5000,
+      );
+
+      const res = await request(server.url, "/api/hello");
+      expect(res.status).toBe(502);
+      expect(logs.join("")).not.toContain("Reiniciando em");
+    } finally {
+      server.stop();
+      delete process.env.CM_TUNNEL_CRASH_MARKER;
+      rmSync(marker, { force: true });
       spy.mockRestore();
     }
   });

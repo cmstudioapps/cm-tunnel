@@ -28,6 +28,13 @@ export interface ServeOptions {
     port?: number;
     /** Recebe logs do servidor de API quando apiMode = "server" */
     onLog?: (line: string) => void;
+    /**
+     * Reinicia a API automaticamente se o processo cair depois de ficar pronto
+     * (padrão: true, apenas em `apiMode: "server"`).
+     */
+    apiRestart?: boolean;
+    /** Máximo de tentativas consecutivas de reinício (padrão: 5) */
+    apiRestartMaxAttempts?: number;
 }
 export declare class StaticServer {
     private options;
@@ -44,12 +51,36 @@ export declare class StaticServer {
     private apiProxy;
     private apiPort;
     private stopping;
+    private apiReady;
+    private apiRestartEnabled;
+    private apiRestartMaxAttempts;
+    private apiRestartAttempts;
+    private apiRestartTimer;
+    private apiHealthyTimer;
     private moduleCache;
     port: number;
     url: string;
     constructor(options: ServeOptions);
     private prepareRoots;
+    private createApiProxy;
+    /**
+     * Encerra apenas o processo/proxy da API, sem marcar o servidor como parado.
+     * Usado durante reinícios automáticos.
+     */
+    private teardownApi;
+    private logSupervisor;
+    /**
+     * Inicia o processo da API. Em reinícios, falhas não são fatais: o supervisor
+     * agenda uma nova tentativa com backoff.
+     */
     private startApiServer;
+    private spawnApiProcess;
+    /**
+     * Zera o contador de tentativas quando a API se mantém saudável tempo
+     * suficiente, para não desistir de reinícios pontuais ao longo do dia.
+     */
+    private scheduleApiHealthyReset;
+    private scheduleApiRestart;
     private stopApiServer;
     private rewriteApiUrl;
     private handleApiServer;

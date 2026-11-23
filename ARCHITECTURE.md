@@ -44,14 +44,14 @@ O fluxo de portas é importante:
 |---|---|
 | `src/index.ts` | API pública: `tunnel()`, atalhos `cloudflare/localtunnel/ngrok/serve`, tipos exportados. |
 | `src/Tunnel.ts` | Orquestração: valida Cloudflare, escolhe provider, sobe `serve`, aplica `rateLimit`, cria o provider e o `TunnelInstance`. |
-| `src/StaticServer.ts` | Servidor HTTP local: estático (`public`/`directory`/`html`), API em **handlers** e API em **server mode** (spawn + proxy). |
-| `src/RateLimiter.ts` | Proxy HTTP/WS com limite por IP usando `bancoz`. |
+| `src/StaticServer.ts` | Servidor HTTP local: estático (`public`/`directory`/`html`), API em **handlers**, API em **server mode** (spawn + proxy) e **supervisor** com restart/backoff. |
+| `src/RateLimiter.ts` | Proxy HTTP/WS com limite por IP usando `bancoz`, match por segmento e limpeza periódica. |
 | `src/Provider.ts` | Classe base `Provider extends EventEmitter` e tipos `ProviderOptions`/`TunnelResult`. |
 | `src/providers/cloudflare.ts` | Spawn do `cloudflared`, modos quick/named, detecção de URL/erros, sanitização de token. |
 | `src/providers/localtunnel.ts` | Provider LocalTunnel. |
 | `src/providers/ngrok.ts` | Provider Ngrok. |
 | `src/cli.ts` | Executável interativo: prompts, plan, start, logs/dashboard, sinais. |
-| `src/cli-utils.ts` | Tipos (`Plan`, `CliOptions`), flags, i18n PT/EN, `buildTunnelOptions`, validações. |
+| `src/cli-utils.ts` | Tipos (`Plan`, `CliOptions`, `ProviderName`), flags, i18n PT/EN, `buildTunnelOptions`, validações. |
 | `src/config.ts` | `.env` e `.cm-tunnel.json`: carregar, salvar, token com `chmod 600`. |
 | `src/doctor.ts` | `cm-tunnel doctor`: diagnóstico de ambiente/config/rede. |
 | `src/dashboard.ts` | Painel TUI (ANSI) com status, URL e últimas linhas de log. |
@@ -62,12 +62,13 @@ O fluxo de portas é importante:
 
 | Caminho | Cobre |
 |---|---|
-| `tests/tunnel.test.ts` | API pública, validações, Cloudflare quick/named com `child_process` mockado, `onLog`, `ready` após `await`, erros de saída. |
-| `tests/serve.test.ts` | Estático, handlers, segurança (dotfiles/traversal), API em modo server, 405, timeout/erro de entry. |
-| `tests/cli.test.ts` | Flags, comandos, normalização de domínio/prefixo, `buildTunnelOptions`. |
+| `tests/tunnel.test.ts` | API pública, validações, Cloudflare quick/named com `child_process` mockado, `onLog`, `ready` após `await`, erros de saída, limpeza de recursos quando o provider falha. |
+| `tests/serve.test.ts` | Estático, handlers, segurança (dotfiles/traversal), API em modo server, 405, timeout/erro de entry, restart com backoff e `stop()`. |
+| `tests/cli.test.ts` | Flags, comandos, provedores, normalização de domínio/prefixo, `buildTunnelOptions`. |
+| `tests/rate-limiter.test.ts` | Match por segmento, limite global/seletivo, isolamento por IP, `cleanupExpired`. |
 | `tests/fixtures/public/` | Site e arquivo `public/api/secret.js` para provar que API nunca vira estático. |
 | `tests/fixtures/api/` | Handlers de exemplo (`hello.js`, `echo.js`, `method.js`, `nested/index.js`, `boom.js`). |
-| `tests/fixtures/api-server/` | App HTTP normal para o modo `apiMode: "server"`; `bad.js` simula entry que morre. |
+| `tests/fixtures/api-server/` | App HTTP normal para o modo `apiMode: "server"`; `bad.js` morre antes de ficar pronto; `crash.js` cai após ficar pronto (testa o supervisor via `CM_TUNNEL_CRASH_MARKER`). |
 
 ### Build, publicação e config
 
@@ -85,8 +86,8 @@ O fluxo de portas é importante:
 
 | Arquivo | Conteúdo |
 |---|---|
-| `.cm-tunnel.json` | `mode`, `public`, `api`, `apiMode`, `apiEntry`, `apiPrefix`, `publish`, `domain`, `target`, `port`. **Sem token.** |
-| `.env` | `CLOUDFLARE_TOKEN=...` (permissão `600`). |
+| `.cm-tunnel.json` | `mode`, `public`, `api`, `apiMode`, `apiEntry`, `apiPrefix`, `publish`, `domain`, `provider`, `subdomain`, `target`, `port`. **Sem token.** |
+| `.env` | `CLOUDFLARE_TOKEN=...` (permissão `600`) e/ou `NGROK_AUTHTOKEN`. |
 | `public/` | Site estático. |
 | `api/` | Handlers **ou** app normal, dependendo de `apiMode`. |
 
@@ -112,6 +113,7 @@ O fluxo de portas é importante:
    - `close` para rate limiter e static server.
 9. `TunnelInstance.port` retorna `options.port ?? servedPort ?? targetPort`.
 10. `stop()` encerra rate limiter, static server e provider.
+11. **Falha no provider** após `serve`/`rateLimit` terem subido: `cleanup()` encerra ambos antes de relançar o erro, evitando portas/processos órfãos.
 
 ---
 
@@ -137,6 +139,7 @@ O fluxo de portas é importante:
 - `apiMode`: `"handlers"` (padrão) ou `"server"`.
 - `stripApiPrefix`: padrão `true`.
 - `apiEntry`: no modo server, `path.resolve(apiEntry)` ou `<api>/index.js`.
+- `apiRestart`: padrão `true`; `apiRestartMaxAttempts`: padrão `5` (só modo server).
 
 ### 5.2 Segurança do estático
 
@@ -165,19 +168,27 @@ O fluxo de portas é importante:
 
 ### 5.4 Modo server
 
-Em `startApiServer`:
+Em `startApiServer` (delega para `spawnApiProcess`):
 
 1. `findFreePort()` pega uma porta livre em `127.0.0.1`.
 2. `spawn(process.execPath, [apiEntry], { cwd: process.cwd(), env: { ...process.env, PORT, CM_TUNNEL_API_PORT } })`.
 3. Saída do app é repassada para `serve.onLog`.
 4. A lib espera o app responder, consultando `isPortInUse(port)` a cada **100 ms**, até `apiTimeout` (padrão **30 s**).
 5. Se o processo morrer antes: erro com `código/sinal`, saída e dica (`apiMode: "handlers"`).
-6. Se ficar pronto: cria `http-proxy` para `http://127.0.0.1:<port>` com `ws: true`.
+6. Se ficar pronto: cria `http-proxy` para `http://127.0.0.1:<port>` com `ws: true` e liga o supervisor.
 7. Em `/api/*`, o prefixo é removido por padrão (`/api/users` → `/users`).
 8. Upgrade de WebSocket também é proxiado e reescrito.
-9. `stop()` mata o processo da API e fecha o proxy.
+9. `stop()` mata o processo, fecha o proxy e cancela reinícios pendentes.
 
-**Limitação:** se o app morrer depois de pronto, as requisições passam a dar 502; não há restart/watchdog.
+**Supervisor (restart):**
+
+- Se o processo morrer depois de pronto (`apiReady`), `teardownApi()` fecha o proxy e `scheduleApiRestart` agenda um novo spawn.
+- Backoff: `500 ms × 2^(tentativa-1)`, teto de **30 s**.
+- Após **5** tentativas consecutivas sem sucesso, desiste e loga que a API ficou fora do ar.
+- Se a API fica **60 s** no ar, o contador de tentativas zera (`apiHealthyTimer`, `unref()`).
+- Durante o restart, requisições `/api/*` respondem **502** até o novo processo estar pronto.
+- `apiRestart: false` desativa; `apiRestartMaxAttempts` controla o limite.
+- `stopping = true` (via `stop()`) sempre impede novos reinícios.
 
 ### 5.5 Estático
 
@@ -194,12 +205,12 @@ Em `startApiServer`:
 
 - Sobe um `http.Server` em porta aleatória e um `http-proxy` para o alvo.
 - IP: `cf-connecting-ip` → `x-forwarded-for` (primeiro) → `remoteAddress`.
-- Se `routes` vazio ou `true`: aplica globalmente. Caso contrário, usa `url.startsWith(route)`.
+- Se `routes` vazio ou `true`: aplica globalmente. Caso contrário, `pathMatchesRoute(url, route)` compara **segmentos** (`/api` casa `/api` e `/api/x`, mas não `/api2`).
 - Janela de 60 s; ao exceder `maxRequestsPerMinute`, bloqueia por 60 s (429).
-- Persistência via `bancoz` (chave sanitizada do IP).
+- Persistência via `bancoz` (chave sanitizada do IP, tabela `ratelimit`).
+- `cleanupExpired()` remove entradas com janela e bloqueio vencidos; roda a cada **5 min** (`setInterval(...).unref()`) e no `stop()`.
 - WebSocket: `upgrade` é proxiado.
-
-**Cuidados:** `startsWith` pode casar `/api2` com `/api`; não há limpeza explícita das chaves do `bancoz`; não há testes automatizados do limiter.
+- Testes em `tests/rate-limiter.test.ts`.
 
 ---
 
@@ -231,32 +242,37 @@ Em `startApiServer`:
 2. `--help`, `--version`.
 3. `doctor` roda e encerra (não exige TTY).
 4. Exige TTY se não for `--yes`.
-5. Verifica `cloudflared --version` (falha cedo se não existe).
-6. `loadDotEnv` + `loadConfig`.
+5. `loadDotEnv` + `loadConfig`.
+6. Resolve o provedor: `--provider` > `.cm-tunnel.json` > `cloudflare`.
 7. Se existe config, pergunta se quer usá-la; `--yes` aceita direto.
-8. Define modo/fonte:
+8. Só verifica `cloudflared --version` quando o provedor é `cloudflare`.
+9. Define modo/fonte:
    - `--target` → servidor existente;
    - pastas + `site/api/both`;
    - `--yes` auto-detecta pastas existentes.
-9. Define pastas (`public`/`api`), pergunta só se não existirem.
-10. Define `apiMode` (handlers/server) e `apiEntry` quando server.
-11. Cria pastas com starter (`index.html`, `hello.js` ou `index.js` de servidor).
-12. Define publish (quick/domain), domínio, token e porta.
-    - Token: `--token` → `CLOUDFLARE_TOKEN` → `.env` → prompt.
+10. Define pastas (`public`/`api`), pergunta só se não existirem.
+11. Define `apiMode` (handlers/server) e `apiEntry` quando server.
+12. Cria pastas com starter (`index.html`, `hello.js` ou `index.js` de servidor).
+13. Define publish (quick/domain), domínio, token e porta.
+    - Provedor ≠ `cloudflare` sempre usa URL temporária; `--domain`/`--token` apenas avisam.
+    - Token Cloudflare: `--token` → `CLOUDFLARE_TOKEN` → `.env` → prompt.
+    - ngrok: `NGROK_AUTHTOKEN` (ou aviso se ausente).
     - Token digitado é salvo em `.env` com `chmod 600` (se `--save`).
     - Porta em domínio: checa se está livre (pastas) ou se o servidor responde (`target`).
-13. Imprime resumo e confirma.
-14. `--dry-run` encerra sem criar nada/salvar.
-15. `dashboard`/`--logs` configuram o sink de logs.
-16. `tunnel(...)` sobe o túnel.
-17. **Só depois do sucesso** salva `.cm-tunnel.json`.
-18. `SIGINT`/`SIGTERM` encerram dashboard, túnel e app de API.
+14. Imprime resumo e confirma.
+15. `--dry-run` encerra sem criar nada/salvar.
+16. `dashboard`/`--logs` configuram o sink de logs.
+17. `tunnel(...)` sobe o túnel.
+18. **Só depois do sucesso** salva `.cm-tunnel.json`.
+19. `SIGINT`/`SIGTERM` encerram dashboard, túnel e app de API.
 
 ### 8.2 Precedência de configuração
 
 ```
+provedor: --provider > .cm-tunnel.json > cloudflare
 flags CLI > .cm-tunnel.json (se aceito) > detecção/defaults
 token: --token > CLOUDFLARE_TOKEN > .env > prompt
+token ngrok: NGROK_AUTHTOKEN
 ```
 
 ### 8.3 Strings e ajuda
@@ -271,7 +287,7 @@ token: --token > CLOUDFLARE_TOKEN > .env > prompt
 
 ### doctor (`src/doctor.ts`)
 
-Verifica Node, `cloudflared`, config, token (quando domínio), pastas/entry, porta livre ou servidor ativo, DNS e lembra do Public Hostname. Falhas → exit code 1.
+Verifica Node, `cloudflared` (somente se o provedor for Cloudflare), config, token (quando domínio), pastas/entry, porta livre ou servidor ativo, DNS e lembra do Public Hostname. Falhas → exit code 1.
 
 **Não verifica:** validade real do token, Public Hostname no dashboard, ingress rules. Isso exige API token de conta (não o token do túnel).
 
@@ -299,13 +315,16 @@ Verifica Node, `cloudflared`, config, token (quando domínio), pastas/entry, por
   "apiPrefix": "/api",
   "publish": "domain",
   "domain": "escola.caiomultiversando.com.br",
+  "provider": "cloudflare",
   "port": 3000
 }
 ```
 
 - `target` substitui `public`/`api` (modo servidor existente).
 - `apiMode`/`apiEntry` só fazem sentido sem `target`.
-- `.env` guarda `CLOUDFLARE_TOKEN`; nunca vai para o JSON.
+- `provider` ausente é tratado como `cloudflare` (retrocompatível).
+- `subdomain` só é usado por `localtunnel`/`ngrok`.
+- `.env` guarda `CLOUDFLARE_TOKEN` e/ou `NGROK_AUTHTOKEN`; nunca vão para o JSON.
 - Token em texto puro no `.env` (proteção por permissão `600`).
 
 ---
@@ -332,18 +351,19 @@ Limites:
 
 ## 12. Testes
 
-- **93 testes** (25 CLI, 19 serve, 49 tunnel).
+- **112 testes** (31 CLI, 22 serve, 49 tunnel, 10 rate-limiter).
 - `vitest.config.ts` exclui `.remote` (clone temporário de manutenção).
 - `child_process` é mockado nos testes de provider; não há teste real contra o `cloudflared`.
 - Fixtures de API em `tests/fixtures/api` e `tests/fixtures/api-server`.
+- `crash.js` usa `CM_TUNNEL_CRASH_MARKER` para cair só na primeira execução; o teste espera o log de restart.
 - `tests/fixtures/public/.env` é criado em `beforeAll` e removido em `afterAll` (não versionado).
+- `rate-limiter.test.ts` usa um diretório temporário do `bancoz` (`bancoz.path(tmp)`).
 
 Lacunas de teste:
 
 - Sem teste E2E com Cloudflare real (depende de rede/conta).
 - Sem teste automatizado de TTY/CLI interativo (prompts).
 - Sem teste de Windows.
-- Sem teste do `RateLimiter`.
 - Sem teste de `doctor`/`dashboard` (só validação manual).
 
 ---
@@ -362,7 +382,7 @@ Lacunas de teste:
 
 ```bash
 git status                    # limpo
-npm run prepublishOnly        # lint + 93 testes + check:self + build
+npm run prepublishOnly        # lint + 112 testes + check:self + build
 npm pack --dry-run            # confira 31 arquivos, sem tests/src/.env
 npm version patch             # quando aplicável
 npx --yes npm@11 publish      # npm 9.2 travava no fluxo web de 2FA
@@ -373,7 +393,7 @@ npm view cm-tunnel version    # confirme a versão publicada
 > **Incidente histórico:** uma vez rodaram `npm install cm-tunnel` dentro da própria
 > pasta do projeto. Isso criou `"cm-tunnel": "^1.5.0"` nas dependências e uma cópia
 > em `node_modules/cm-tunnel`. O guard `check:self` existe para impedir que volte.
-> A 1.7.0 publicada ainda contém esse erro; publique uma 1.7.1+ com o fix.
+> A 1.7.0 publicada ainda contém esse erro; a 1.7.1+ corrige.
 
 ---
 
@@ -383,7 +403,7 @@ npm view cm-tunnel version    # confirme a versão publicada
 
 | Item | Onde | Impacto | Sugestão |
 |---|---|---|---|
-| 1.7.0 publicada com self-dependency | `package.json` | Instala cópia aninhada desnecessária | Publicar 1.7.1 com `check:self` |
+| 1.7.0 publicada com self-dependency | `package.json` | Instala cópia aninhada desnecessária | Corrigido na 1.7.1+ (`check:self`) |
 | Sem CI | GitHub | Regressões passam | Action rodando lint/test/build/check:self |
 | Fluxo de publish manual e frágil | npm 9.2 | Trava no web auth | Usar npm 11 ou token granular com bypass 2FA |
 
@@ -393,7 +413,6 @@ npm view cm-tunnel version    # confirme a versão publicada
 |---|---|---|---|
 | `apiPrefix` não pode ser `/` | `cli-utils.normalizePrefix`, `StaticServer` | Não serve API no root de um subdomínio em modo pastas | Permitir `/` ou mapear host → backend |
 | Sem múltiplos backends/hostnames por processo | `Tunnel.ts`/`StaticServer` | Precisa de um túnel por porta | Mapa `routes: [{prefix|host, target}]` |
-| Sem restart/watchdog do app de API | `StaticServer.startApiServer` | Se o app morre, fica 502 | Supervisor com backoff |
 | Sem flags `stripApiPrefix`/`apiTimeout` | `cli-utils` | Ajuste só via código | Expor flags |
 | Logs da API sem sanitização | `StaticServer` | Segredos no log do app aparecem | Filtros configuráveis |
 | Detecção de erro do Cloudflare por substring | `providers/cloudflare.ts` | Quebra se o `cloudflared` mudar texto | Preferir exit codes/JSON/log estruturado |
@@ -404,9 +423,6 @@ npm view cm-tunnel version    # confirme a versão publicada
 | Item | Onde | Impacto |
 |---|---|---|
 | TypeScript não roda direto | `StaticServer`/CLI | Handler/entry precisam ser `.js` |
-| `RateLimiter` usa `startsWith` | `RateLimiter.ts` | `/api2` casa com `/api` |
-| `bancoz` sem limpeza | `RateLimiter.ts` | Chaves antigas acumulam |
-| CLI só Cloudflare | `cli.ts` | localtunnel/ngrok só via código |
 | Dashboard básico | `dashboard.ts` | Sem scroll/resize |
 | `dist/` versionado | Git | Diffs grandes; decisão consciente para uso via git |
 | `examples/` fora do `tsconfig` | `tsconfig.json` | Podem ficar desatualizados |
@@ -433,8 +449,10 @@ npm view cm-tunnel version    # confirme a versão publicada
 1. Crie `src/providers/novo.ts` exportando default uma classe que estende `Provider`.
 2. Implemente `start(): Promise<TunnelResult>`.
 3. Registre em `providerLoaders` (`Tunnel.ts`).
-4. Adicione testes com `child_process`/lib mockados.
-5. Documente no README.
+4. Adicione o nome em `ProviderName` e em `parseCliArgs`/`HELP`/README (validação de `--provider`).
+5. Ajuste `buildTunnelOptions` se o provider exigir opções próprias (ex.: `authtoken`).
+6. Adicione testes com `child_process`/lib mockados.
+7. Documente no README.
 
 ### Novo modo de API
 
@@ -455,6 +473,8 @@ Siga o checklist da seção 13. Nunca rode `npm install cm-tunnel` dentro deste 
 | Erro | Causa provável | Onde olhar |
 |---|---|---|
 | `API encerrou antes de ficar pronta (código 0)` | Entry não chama `listen(process.env.PORT)`; é handler | `StaticServer.startApiServer`, config `apiMode` |
+| `A API encerrou inesperadamente: código N` | App caiu depois de pronto; supervisor vai reiniciar | `StaticServer.scheduleApiRestart`, `--logs` |
+| `Limite de 5 reinícios atingido` | App morre repetidamente no boot | corrigir o app ou `apiRestartMaxAttempts` |
 | `API não ficou pronta em 30s` | App não escuta na porta injetada / demora | `apiTimeout`, `PORT`, `--logs` |
 | `Port X is already in use` | Porta do servidor interno ocupada | `cli.ts` (`isPortFree`), `--port` |
 | `The tunnel credentials file should be .json...` | Passou `cert.pem` em `credentialsFile` | `validateCredentialsFile` |
@@ -478,5 +498,9 @@ Siga o checklist da seção 13. Nunca rode `npm install cm-tunnel` dentro deste 
 - **`files` no package.json**: allowlist mais segura que `.npmignore`; o tarball tem 31 arquivos.
 - **`dist/` versionado**: decisão consciente para uso via Git; o publish também o inclui.
 - **`check:self`**: incidente real de self-dependency; bloqueia no `prepublishOnly`.
+- **Match por segmento no rate limit**: `startsWith` casava `/api2` com `/api`; agora compara `/api` e `/api/...`.
+- **Limpeza periódica do bancoz**: sem TTL nativo, então `cleanupExpired()` varre a tabela e apaga entradas vencidas (5 min + no `stop()`).
+- **Supervisor com backoff e teto de saúde**: 5 tentativas, 500 ms → 30 s; 60 s no ar zera o contador para não desistir de quedas esporádicas ao longo do dia.
+- **Provedor no CLI**: `localtunnel`/`ngrok` não têm domínio próprio; o CLI força URL temporária em vez de falhar tarde no provider.
 - **npm 11 no publish**: o npm 9.2 travava após o web auth de 2FA.
 - **Token nunca no JSON**: `.env` com `600`; `doctor` só verifica presença, não validade.
