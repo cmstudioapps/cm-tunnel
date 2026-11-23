@@ -1,0 +1,16 @@
+node_modules/
+.remote/
+dist/.cache/
+coverage/
+*.tgz
+npm-debug.log*
+
+# Segredos locais
+/.env
+/.cm-tunnel.json
+tests/fixtures/public/.env
+
+# Ferramentas locais do editor
+skills/
+
+.DS_Store

@@ -1,8 +1,10 @@
 import { EventEmitter } from "events";
 export class Provider extends EventEmitter {
+    options;
     port;
-    constructor(port) {
+    constructor(options) {
         super();
-        this.port = port;
+        this.options = options;
+        this.port = options.port;
     }
 }
