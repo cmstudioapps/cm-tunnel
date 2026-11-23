@@ -1,6 +1,6 @@
 {
   "name": "cm-tunnel",
-  "version": "1.7.0",
+  "version": "1.7.1",
   "description": "Exponha seu servidor HTTP local para a internet através do Cloudflare ou LocalTunnel de forma simples",
   "type": "module",
   "main": "./dist/index.js",
@@ -21,8 +21,9 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "lint": "tsc --noEmit",
+    "check:self": "node -e \"const fs=require('fs');const p=require('./package.json');if(p.dependencies&&p.dependencies['cm-tunnel']){console.error('Erro: cm-tunnel nao pode depender de si mesmo');process.exit(1)}if(fs.existsSync('node_modules/cm-tunnel')){console.error('Erro: node_modules/cm-tunnel aninhado');process.exit(1)}console.log('ok: sem self-dependency')\"",
     "format": "prettier --write \"src/**/*.ts\" \"examples/**/*.ts\" \"tests/**/*.ts\"",
-    "prepublishOnly": "npm run lint && npm run test && npm run build"
+    "prepublishOnly": "npm run lint && npm run test && npm run check:self && npm run build"
   },
   "keywords": [
     "tunnel",
@@ -54,7 +55,6 @@
   "dependencies": {
     "@ngrok/ngrok": "^1.7.0",
     "bancoz": "^2.2.8",
-    "cm-tunnel": "^1.5.0",
     "http-proxy": "^1.18.1",
     "localtunnel": "^2.0.2",
     "prompts": "^2.4.2"
