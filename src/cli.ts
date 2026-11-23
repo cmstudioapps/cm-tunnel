@@ -500,11 +500,6 @@ async function main(): Promise<void> {
     return;
   }
 
-  if (opts.save && !opts.dryRun) {
-    saveConfig(plan);
-    console.log(s.savedConfig(CONFIG_FILE));
-  }
-
   if (opts.dryRun) {
     console.log(s.dryRun);
     return;
@@ -573,6 +568,12 @@ async function main(): Promise<void> {
       console.log(`  ${s.domainHint(domain, port)}`);
     }
     console.log(s.pressCtrlC);
+  }
+
+  // Só salva a configuração depois que o túnel subiu com sucesso.
+  if (opts.save) {
+    saveConfig(plan);
+    if (!dashboard) console.log(s.savedConfig(CONFIG_FILE));
   }
 
   const stop = () => {

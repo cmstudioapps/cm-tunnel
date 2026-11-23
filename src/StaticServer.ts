@@ -223,6 +223,8 @@ export class StaticServer {
     this.apiProcess = child;
     let output = '';
     let exited = false;
+    let ready = false;
+    let exitInfo = '';
 
     const forward = (data: Buffer) => {
       const text = data.toString();
@@ -234,9 +236,10 @@ export class StaticServer {
     child.stderr?.on('data', forward);
     child.once('exit', (code, signal) => {
       exited = true;
-      if (!this.stopping) {
+      exitInfo = code !== null ? `código ${code}` : `sinal ${signal}`;
+      if (!this.stopping && ready) {
         console.error(
-          `[cm-tunnel] A API encerrou inesperadamente (${code ?? signal}).`,
+          `[cm-tunnel] A API encerrou inesperadamente (${exitInfo}).`,
         );
       }
     });
@@ -248,7 +251,11 @@ export class StaticServer {
       if (exited) {
         this.stopApiServer();
         throw new Error(
-          `API encerrou antes de ficar pronta.\n${output}`.trim(),
+          `API encerrou antes de ficar pronta (${exitInfo || 'sem código'}).\n` +
+            'O arquivo de entrada precisa iniciar um servidor HTTP em process.env.PORT ' +
+            '(ex: app.listen(process.env.PORT)). Se ele exporta apenas uma função (req, res), ' +
+            'use apiMode: "handlers" ou --api-mode handlers.' +
+            (output ? `\nSaída:\n${output}` : ''),
         );
       }
 
@@ -268,6 +275,7 @@ export class StaticServer {
           }
         });
 
+        ready = true;
         return;
       }
 
@@ -276,7 +284,9 @@ export class StaticServer {
 
     this.stopApiServer();
     throw new Error(
-      `API não ficou pronta em ${timeoutMs / 1000}s.\n${output}`.trim(),
+      `API não ficou pronta em ${timeoutMs / 1000}s. ` +
+        'Verifique se o entry chama app.listen(process.env.PORT).' +
+        (output ? `\nSaída:\n${output}` : ''),
     );
   }
 

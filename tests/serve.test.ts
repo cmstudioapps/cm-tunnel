@@ -262,7 +262,9 @@ describe("StaticServer — API em modo server", () => {
           apiEntry: join(apiServerDir, "bad.js"),
           apiTimeout: 2000,
         }),
-      ).rejects.toThrow("API encerrou");
+      ).rejects.toThrow(
+        /API encerrou antes de ficar pronta[\s\S]*apiMode: "handlers"/,
+      );
     } finally {
       spy.mockRestore();
     }

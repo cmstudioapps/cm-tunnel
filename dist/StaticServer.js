@@ -155,6 +155,8 @@ export class StaticServer {
         this.apiProcess = child;
         let output = '';
         let exited = false;
+        let ready = false;
+        let exitInfo = '';
         const forward = (data) => {
             const text = data.toString();
             output = `${output}${text}`.slice(-4000);
@@ -164,8 +166,9 @@ export class StaticServer {
         child.stderr?.on('data', forward);
         child.once('exit', (code, signal) => {
             exited = true;
-            if (!this.stopping) {
-                console.error(`[cm-tunnel] A API encerrou inesperadamente (${code ?? signal}).`);
+            exitInfo = code !== null ? `código ${code}` : `sinal ${signal}`;
+            if (!this.stopping && ready) {
+                console.error(`[cm-tunnel] A API encerrou inesperadamente (${exitInfo}).`);
             }
         });
         const timeoutMs = this.options.apiTimeout ?? 30000;
@@ -173,7 +176,11 @@ export class StaticServer {
         while (Date.now() < deadline) {
             if (exited) {
                 this.stopApiServer();
-                throw new Error(`API encerrou antes de ficar pronta.\n${output}`.trim());
+                throw new Error(`API encerrou antes de ficar pronta (${exitInfo || 'sem código'}).\n` +
+                    'O arquivo de entrada precisa iniciar um servidor HTTP em process.env.PORT ' +
+                    '(ex: app.listen(process.env.PORT)). Se ele exporta apenas uma função (req, res), ' +
+                    'use apiMode: "handlers" ou --api-mode handlers.' +
+                    (output ? `\nSaída:\n${output}` : ''));
             }
             if (await isPortInUse(port)) {
                 this.apiProxy = httpProxy.createProxyServer({
@@ -189,12 +196,15 @@ export class StaticServer {
                         response.end(JSON.stringify({ error: 'Bad Gateway' }));
                     }
                 });
+                ready = true;
                 return;
             }
             await new Promise((resolveWait) => setTimeout(resolveWait, 100));
         }
         this.stopApiServer();
-        throw new Error(`API não ficou pronta em ${timeoutMs / 1000}s.\n${output}`.trim());
+        throw new Error(`API não ficou pronta em ${timeoutMs / 1000}s. ` +
+            'Verifique se o entry chama app.listen(process.env.PORT).' +
+            (output ? `\nSaída:\n${output}` : ''));
     }
     stopApiServer() {
         this.stopping = true;
