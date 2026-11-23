@@ -29,6 +29,7 @@ Sem Express, sem configurar servidor: aponte as pastas `public` e `api` (ou uma 
 - [Problemas comuns](#problemas-comuns)
 - [FAQ](#faq)
 - [Desenvolvimento](#desenvolvimento)
+- [Arquitetura e dívida técnica](https://github.com/cmstudioapps/cm-tunnel/blob/main/ARCHITECTURE.md)
 - [Licença](#licença)
 
 ---
@@ -828,11 +829,14 @@ Sim, desde que o binário `cloudflared` esteja no `PATH`. `npx` e `npm run` são
 
 ## Desenvolvimento
 
+> Arquitetura interna, fluxos, decisões e dívida técnica: [ARCHITECTURE.md](https://github.com/cmstudioapps/cm-tunnel/blob/main/ARCHITECTURE.md)
+
 ```bash
 npm install
 npm test          # roda a suíte
 npm run lint
 npm run build     # gera dist/ e deixa dist/cli.js executável
+npm run check:self # impede self-dependency e node_modules/cm-tunnel
 ```
 
 Estrutura principal:
