@@ -51,7 +51,7 @@ Se não tiver o `cloudflared`:
 npx cm-tunnel
 ```
 
-> O CLI faz parte da **v1.5.0+**. Se o `npx` baixar uma versão antiga, rode `npx cm-tunnel@1.5.0`.
+> O CLI existe desde a **1.5.0**. `doctor`, `dashboard` e `apiMode: server` exigem a **1.7.0+**. Se o `npx` baixar uma versão antiga, use `npx cm-tunnel@latest` (ou `@1.7.0`).
 
 O CLI pergunta:
 
@@ -61,12 +61,16 @@ O CLI pergunta:
     Só API (funções de servidor)
 ❯   Site + API
     Servidor já rodando (informar a porta)
+? Como sua API funciona? ›
+    Funções por arquivo (handlers)
+❯   Servidor normal (Express, Fastify, Node)
+? Arquivo de entrada da API › api/index.js
 ? Como você quer publicar? ›
 ❯   URL temporária (trycloudflare.com) — sem configuração
     Domínio próprio (túnel Cloudflare)
 ```
 
-> Se `public/` e `api/` não existirem, ele pergunta se pode criá-las com arquivos de exemplo.
+> As perguntas de pasta, `apiMode` e `apiEntry` só aparecem quando fazem sentido. Se `public/` e `api/` não existirem, ele oferece criar com arquivos de exemplo (`index.html`, `hello.js` ou um `index.js` de servidor).
 
 No fim:
 
@@ -80,7 +84,7 @@ Túnel no ar: https://algum-nome-aleatorio.trycloudflare.com
 Pressione Ctrl+C para encerrar.
 ```
 
-As escolhas ficam salvas em `.cm-tunnel.json`. Na próxima vez é só:
+As escolhas são salvas em `.cm-tunnel.json` **depois que o túnel sobe com sucesso**. Na próxima vez é só:
 
 ```bash
 npx cm-tunnel
@@ -352,6 +356,8 @@ cloudflared tunnel token <nome-ou-id-do-tunel>
 
 ## Estrutura de pastas e rotas
 
+No modo `handlers` (padrão):
+
 | Arquivo | Rota |
 |---|---|
 | `public/index.html` | `/` |
@@ -369,7 +375,7 @@ cloudflared tunnel token <nome-ou-id-do-tunel>
 
 ## Handlers de API
 
-Use `.js`, `.mjs` ou `.cjs`. TypeScript precisa ser compilado antes.
+No modo `handlers` (padrão), use `.js`, `.mjs` ou `.cjs`. TypeScript precisa ser compilado antes.
 
 **Função default (qualquer método):**
 
@@ -413,7 +419,7 @@ npx cm-tunnel [opções]
 | `--public <pasta>` | Pasta do site (padrão: `public`) |
 | `--api <pasta>` | Pasta da API (padrão: `api`) |
 | `--api-mode handlers\|server` | API por arquivo (`handlers`) ou servidor normal (`server`) |
-| `--api-entry <arquivo>` | Entrypoint no modo server (padrão: `api/index.js`) |
+| `--api-entry <arquivo>` | Entrypoint no modo server (detectado ou `<api>/index.js`) |
 | `--api-prefix <prefixo>` | Prefixo da API (padrão: `/api`) |
 | `--target <porta>` | Tunelar um servidor que já está rodando |
 | `--port <porta>` | Porta do servidor interno (pastas + domínio) |
@@ -422,7 +428,7 @@ npx cm-tunnel [opções]
 | `--quick` | URL temporária, sem configuração |
 | `--yes`, `-y` | Não perguntar (usa flags/padrões) |
 | `--dry-run` | Mostra o plano, não cria nada e não inicia |
-| `--logs`, `-l` | Mostra os logs do `cloudflared` (token oculto) |
+| `--logs`, `-l` | Mostra logs do `cloudflared` e do servidor de API (no modo `server`) |
 | `--no-save` | Não salva `.cm-tunnel.json` nem o token |
 | `--lang pt\|en` | Idioma (padrão: detecta pelo `LANG`) |
 | `-h`, `--help` | Ajuda |
@@ -454,7 +460,7 @@ npx cm-tunnel --lang en
 
 | Arquivo | Conteúdo |
 |---------|----------|
-| `.cm-tunnel.json` | modo, pastas (ou porta), domínio (sem token) |
+| `.cm-tunnel.json` | modo, pastas (ou porta), `apiMode`/`apiEntry`, domínio (sem token) |
 | `.env` | `CLOUDFLARE_TOKEN` (permissão `600`) |
 
 ---
@@ -474,6 +480,7 @@ Verifica:
 - `.cm-tunnel.json` válido
 - token presente (quando usa domínio)
 - pastas `public`/`api`
+- entrypoint da API (quando `apiMode = "server"`)
 - porta livre (ou servidor respondendo no modo `--target`)
 - DNS do domínio
 - lembrete do Public Hostname
@@ -491,9 +498,9 @@ cm-tunnel doctor
 ✔ Pasta api: ok
 ✔ Porta 3000: livre
 ✖ DNS escola.exemplo.com: não resolve
-! Public Hostname: confira no dashboard
+! Public Hostname: confira no dashboard (escola.exemplo.com -> http://localhost:3000)
 
-Resumo: 6 ok, 1 aviso(s), 2 erro(s)
+Resumo: 7 ok, 1 aviso(s), 1 erro(s)
 Corrija os itens com ✖ antes de publicar.
 ```
 
@@ -511,7 +518,7 @@ Mostra em tela cheia:
 - URL pública
 - modo (site, API, site + API ou servidor)
 - porta local
-- últimas 10 linhas do `cloudflared`
+- últimas 10 linhas do `cloudflared` e do servidor de API (no modo `server`)
 
 `Ctrl+C` encerra o túnel e restaura o terminal. Se não houver TTY, cai automaticamente para logs em texto.
 
@@ -521,7 +528,7 @@ Mostra em tela cheia:
 npx cm-tunnel --logs
 ```
 
-Mostra a saída do `cloudflared` direto no terminal, sanitizada (o token nunca aparece).
+Mostra a saída do `cloudflared` e do servidor de API direto no terminal. A saída do `cloudflared` é sanitizada (token oculto); os logs do seu app são repassados como estão — evite imprimir segredos neles.
 
 ---
 
@@ -706,9 +713,9 @@ Enquanto a zona estiver `pending` na Cloudflare, nada resolve publicamente.
 
 ### `npx cm-tunnel` diz que o comando não existe ou abre uma versão antiga
 
-- A CLI existe a partir da **1.5.0**:
+- O CLI existe desde a **1.5.0**; `doctor`, `dashboard` e `apiMode: server` exigem **1.7.0+**.
   ```bash
-  npx cm-tunnel@1.5.0
+  npx cm-tunnel@latest --version
   ```
 - Confirme a versão:
   ```bash
@@ -743,6 +750,8 @@ npm run deploy
 
 ### A API responde 404
 
+No modo `handlers`:
+
 - O arquivo precisa estar em `api/` com extensão `.js`, `.mjs` ou `.cjs`.
 - A rota segue o caminho do arquivo:
   - `api/hello.js` → `/api/hello`
@@ -753,10 +762,13 @@ npm run deploy
   ```
 - Se mudou o prefixo, use o prefixo configurado (`/v1`, etc.).
 
+No modo `server`, o 404 vem do **seu** app — confira as rotas dele e se o prefixo `/api` está sendo removido (`stripApiPrefix`).
+
 ---
 
 ### A API em modo server não sobe (502 ou timeout)
 
+- **`API encerrou antes de ficar pronta (código 0)`**: o entry não abriu servidor. Ele precisa chamar `app.listen(process.env.PORT)`. Se o arquivo exporta só uma função `(req, res)`, use `apiMode: "handlers"` / `--api-mode handlers`.
 - O app precisa escutar em **`process.env.PORT`** — a lib injeta a porta.
 - O `apiEntry` precisa existir (padrão: `api/index.js`).
 - Rode com `--logs` para ver a saída do seu app.
@@ -786,7 +798,7 @@ Ou no dashboard: **Configure → Refresh token**. Atualize o `.env`.
 ## FAQ
 
 **Preciso de Express?**
-Não. O `cm-tunnel` serve `public/` e executa `api/` sozinho. Se você já tem Express, use `--target <porta>`.
+Não. Você pode usar handlers por arquivo, apontar `apiMode: "server"` para um app Express/Fastify seu, ou rodar o app você mesmo e usar `--target <porta>`.
 
 **Posso publicar só o site ou só a API?**
 Sim. No CLI escolha “Só site” ou “Só API”, ou use `--mode site` / `--mode api`.
@@ -795,13 +807,13 @@ Sim. No CLI escolha “Só site” ou “Só API”, ou use `--mode site` / `--m
 Não. A pasta `api/` só é carregada no servidor. `/api` nunca é servido como arquivo estático.
 
 **Funciona com TypeScript?**
-Os handlers precisam estar em `.js`, `.mjs` ou `.cjs`. Compile o TypeScript antes.
+Os handlers e o entry do modo `server` precisam ser JavaScript executável (`.js`, `.mjs` ou `.cjs`). Compile o TypeScript antes.
 
 **Como atualizo o site?**
-Basta alterar os arquivos em `public/`. Handlers em `api/` recarregam sozinhos quando o arquivo muda.
+Basta alterar os arquivos em `public/`. No modo `handlers`, os arquivos em `api/` recarregam sozinhos quando mudam. No modo `server`, o seu processo decide (reinicie se ele não tiver hot reload).
 
 **Como paro o túnel?**
-`Ctrl+C`. O CLI encerra o `cloudflared` junto.
+`Ctrl+C`. O CLI encerra o `cloudflared` e, no modo `server`, também encerra o processo da API.
 
 **Onde ficam as preferências?**
 Em `.cm-tunnel.json`, na pasta onde você rodou o CLI. O token fica no `.env`.
@@ -829,8 +841,12 @@ Estrutura principal:
 src/
 ├── cli.ts           # executável do CLI
 ├── cli-utils.ts     # i18n, flags, plano
+├── config.ts        # .env e .cm-tunnel.json
+├── net-utils.ts     # portas livres/em uso
+├── doctor.ts        # diagnóstico
+├── dashboard.ts     # painel TUI
 ├── Tunnel.ts        # orquestração dos provedores
-├── StaticServer.ts  # servidor de public + api
+├── StaticServer.ts  # static + handlers + proxy para api server
 ├── RateLimiter.ts   # rate limit por IP
 └── providers/       # cloudflare, localtunnel, ngrok
 ```

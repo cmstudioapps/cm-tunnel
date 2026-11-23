@@ -378,7 +378,7 @@ Opções:
   --public <pasta>         Pasta do site (padrão: public)
   --api <pasta>            Pasta da API (padrão: api)
   --api-mode handlers|server  Como a API funciona (padrão: handlers)
-  --api-entry <arquivo>    Entrypoint no modo server (padrão: api/index.js)
+  --api-entry <arquivo>    Entrypoint no modo server (detectado ou <api>/index.js)
   --api-prefix <prefixo>   Prefixo da API (padrão: /api)
   --target <porta>         Tunelar um servidor que já está rodando
   --port <porta>           Porta local (modo pastas + domínio)
@@ -387,7 +387,7 @@ Opções:
   --quick                  URL temporária, sem configuração
   --yes, -y                Não perguntar (usa flags/padrões)
   --dry-run                Mostra o plano e não inicia
-  --logs, -l               Mostra os logs do cloudflared
+  --logs, -l               Mostra logs do cloudflared e da API (modo server)
   --no-save                Não salvar .cm-tunnel.json
   --lang pt|en             Idioma
   -h, --help               Ajuda
@@ -408,7 +408,7 @@ Options:
   --public <folder>        Site folder (default: public)
   --api <folder>           API folder (default: api)
   --api-mode handlers|server  How the API works (default: handlers)
-  --api-entry <file>       Entrypoint in server mode (default: api/index.js)
+  --api-entry <file>       Entrypoint in server mode (detected or <api>/index.js)
   --api-prefix <prefix>    API prefix (default: /api)
   --target <port>          Tunnel an already running server
   --port <port>            Local port (folders + domain mode)
@@ -417,7 +417,7 @@ Options:
   --quick                  Temporary URL, no setup
   --yes, -y                Do not ask (use flags/defaults)
   --dry-run                Print the plan and do not start
-  --logs, -l               Show cloudflared logs
+  --logs, -l               Show cloudflared and API logs (server mode)
   --no-save                Do not save .cm-tunnel.json
   --lang pt|en             Language
   -h, --help               Help
