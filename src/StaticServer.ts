@@ -275,8 +275,13 @@ export class StaticServer {
   }
 
   private logSupervisor(message: string): void {
-    console.error(message);
-    this.options.onLog?.(`${message}\n`);
+    // Se há sink (CLI --logs/dashboard), ele é a única saída: evita
+    // mensagem duplicada e não corrompe a TUI do dashboard.
+    if (this.options.onLog) {
+      this.options.onLog(`${message}\n`);
+    } else {
+      console.error(message);
+    }
   }
 
   /**

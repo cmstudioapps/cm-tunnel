@@ -197,8 +197,14 @@ export class StaticServer {
         this.apiReady = false;
     }
     logSupervisor(message) {
-        console.error(message);
-        this.options.onLog?.(`${message}\n`);
+        // Se há sink (CLI --logs/dashboard), ele é a única saída: evita
+        // mensagem duplicada e não corrompe a TUI do dashboard.
+        if (this.options.onLog) {
+            this.options.onLog(`${message}\n`);
+        }
+        else {
+            console.error(message);
+        }
     }
     /**
      * Inicia o processo da API. Em reinícios, falhas não são fatais: o supervisor
