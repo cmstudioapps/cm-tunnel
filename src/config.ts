@@ -60,6 +60,11 @@ export function loadConfig(): Plan | null {
       mode: data.mode,
       public: typeof data.public === 'string' ? data.public : undefined,
       api: typeof data.api === 'string' ? data.api : undefined,
+      apiMode:
+        data.apiMode === 'server' || data.apiMode === 'handlers'
+          ? data.apiMode
+          : undefined,
+      apiEntry: typeof data.apiEntry === 'string' ? data.apiEntry : undefined,
       apiPrefix:
         typeof data.apiPrefix === 'string' ? normalizePrefix(data.apiPrefix) : '/api',
       publish: data.publish,

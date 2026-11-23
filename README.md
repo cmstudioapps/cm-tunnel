@@ -98,6 +98,7 @@ npx cm-tunnel --yes
 | Só site estático | `npx cm-tunnel` → **Só site** |
 | Só API | `npx cm-tunnel` → **Só API** |
 | Meu Express já roda na porta 3000 | `npx cm-tunnel --yes --quick --target 3000` |
+| Minha API é um Express normal dentro de `api/` | `npx cm-tunnel --yes --quick --api-mode server` |
 | Testar rápido, sem configurar nada | `npx cm-tunnel --yes --quick` |
 | Domínio próprio | `npx cm-tunnel --domain api.meudominio.com.br` |
 
@@ -185,6 +186,74 @@ serve: { public: './public' } // só site
 serve: { api: './api' }       // só API
 ```
 
+### API em modo servidor (Express, Fastify ou `http`)
+
+Se sua pasta `api/` é uma aplicação normal — e não funções por arquivo — use `apiMode: "server"`.
+
+```text
+api/
+└── index.js   # app.listen(process.env.PORT)
+```
+
+```bash
+npx cm-tunnel --yes --quick --api-mode server
+```
+
+No modo interativo, o CLI pergunta:
+
+```
+? Como sua API funciona? ›
+    Funções por arquivo (handlers)
+❯   Servidor normal (Express, Fastify, Node)
+? Arquivo de entrada da API › api/index.js
+```
+
+O que a lib faz:
+
+- injeta `PORT` e inicia `node api/index.js`
+- serve `public/` normalmente
+- encaminha `/api/*` para o app, removendo o prefixo
+- espera o app responder antes de subir o túnel
+- encerra o app no `Ctrl+C`
+
+Exemplo de `api/index.js`:
+
+```javascript
+import express from 'express';
+
+const app = express();
+
+app.get('/hello', (req, res) => {
+  res.json({ ok: true });
+});
+
+app.listen(process.env.PORT);
+```
+
+Com o padrão `stripApiPrefix: true`:
+
+```text
+GET /api/hello  →  app recebe /hello
+GET /api/users  →  app recebe /users
+```
+
+> O app precisa escutar em `process.env.PORT`. Se ele já usa uma porta fixa, use o modo `--target <porta>`.
+
+**Equivalente em código:**
+
+```javascript
+const t = await tunnel({
+  provider: 'cloudflare',
+  serve: {
+    public: './public',
+    api: './api',
+    apiMode: 'server',
+    apiEntry: './api/index.js',
+    // stripApiPrefix: false, // mantém /api no app
+  },
+});
+```
+
 ---
 
 ## Tunelar um servidor que já existe
@@ -203,7 +272,7 @@ Ou, no modo interativo, escolha:
 ? Porta em que seu servidor já está rodando › 3000
 ```
 
-Nesse modo o `cm-tunnel` **não** inicia servidor nem aplica rate limit próprio — ele só aponta o túnel para a porta informada. Se sua API já usa Express, é o caminho certo.
+Nesse modo o `cm-tunnel` **não** inicia servidor nem aplica rate limit próprio — ele só aponta o túnel para a porta informada. Use quando você já roda o processo e quer controle total dele.
 
 **Equivalente em código:**
 
@@ -292,6 +361,7 @@ cloudflared tunnel token <nome-ou-id-do-tunel>
 | `api/index.js` | `/api` |
 
 - `/api` é reservado: **nunca** cai no estático, mesmo que exista `public/api`.
+- No modo `apiMode: "server"`, tudo em `/api/*` é encaminhado para o seu app (com o prefixo removido por padrão).
 - Funciona com só `public`, só `api`, ou com as duas.
 - `apiPrefix` muda o prefixo padrão (`/api` → `/v1`, por exemplo).
 
@@ -342,6 +412,8 @@ npx cm-tunnel [opções]
 | `--mode site\|api\|both` | O que publicar (pastas) |
 | `--public <pasta>` | Pasta do site (padrão: `public`) |
 | `--api <pasta>` | Pasta da API (padrão: `api`) |
+| `--api-mode handlers\|server` | API por arquivo (`handlers`) ou servidor normal (`server`) |
+| `--api-entry <arquivo>` | Entrypoint no modo server (padrão: `api/index.js`) |
 | `--api-prefix <prefixo>` | Prefixo da API (padrão: `/api`) |
 | `--target <porta>` | Tunelar um servidor que já está rodando |
 | `--port <porta>` | Porta do servidor interno (pastas + domínio) |
@@ -542,6 +614,11 @@ console.log(local.url); // http://127.0.0.1:<porta>
 | `public` | `string` | — | Pasta de arquivos estáticos |
 | `directory` | `string` | — | Alias legado de `public` |
 | `api` | `string` | — | Pasta com handlers; nunca é servida como estático |
+| `apiMode` | `'handlers' \| 'server'` | `'handlers'` | `handlers` = um arquivo por rota; `server` = app normal (Express/Fastify/http) |
+| `apiEntry` | `string` | `<api>/index.js` | Arquivo de entrada no modo `server` |
+| `stripApiPrefix` | `boolean` | `true` | Remove `/api` antes de encaminhar ao servidor |
+| `apiTimeout` | `number` | `30000` | Tempo para o servidor ficar pronto |
+| `onLog` | `(line: string) => void` | — | Recebe logs do servidor de API |
 | `apiPrefix` | `string` | `'/api'` | Prefixo das rotas de API |
 | `html` | `string` | — | HTML fixo para rotas não-API (prioridade sobre `public`) |
 | `port` | `number` | aleatória | Porta local do servidor interno |
@@ -675,6 +752,16 @@ npm run deploy
   export default function handler(req, res) { ... }
   ```
 - Se mudou o prefixo, use o prefixo configurado (`/v1`, etc.).
+
+---
+
+### A API em modo server não sobe (502 ou timeout)
+
+- O app precisa escutar em **`process.env.PORT`** — a lib injeta a porta.
+- O `apiEntry` precisa existir (padrão: `api/index.js`).
+- Rode com `--logs` para ver a saída do seu app.
+- Se o app demorar, aumente `apiTimeout` (padrão: 30s).
+- Se o app usa uma porta fixa, use `--target <porta>` em vez de `apiMode: "server"`.
 
 ---
 

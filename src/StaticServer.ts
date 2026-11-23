@@ -2,6 +2,11 @@ import http from 'http';
 import fs from 'fs';
 import path from 'path';
 import { pathToFileURL } from 'url';
+import { spawn, ChildProcess } from 'child_process';
+import httpProxy from 'http-proxy';
+import { findFreePort, isPortInUse } from './net-utils.js';
+
+export type ApiMode = 'handlers' | 'server';
 
 export interface ServeOptions {
   /** HTML fixo servido em qualquer rota não-API */
@@ -15,9 +20,23 @@ export interface ServeOptions {
    * como estáticos; cada arquivo vira uma rota (`api/hello.js` → `/api/hello`).
    */
   api?: string;
+  /**
+   * Como a API funciona:
+   * - `handlers` (padrão): cada arquivo em `api/` exporta uma função
+   * - `server`: roda um servidor normal (Express, Fastify, http) a partir de `apiEntry`
+   */
+  apiMode?: ApiMode;
+  /** Arquivo de entrada do servidor de API (padrão: `<api>/index.js`) */
+  apiEntry?: string;
+  /** Remove o prefixo da API antes de encaminhar para o servidor (padrão: true) */
+  stripApiPrefix?: boolean;
+  /** Timeout em ms para o servidor de API ficar pronto (padrão: 30000) */
+  apiTimeout?: number;
   /** Prefixo das rotas de API (padrão: `/api`) */
   apiPrefix?: string;
   port?: number;
+  /** Recebe logs do servidor de API quando apiMode = "server" */
+  onLog?: (line: string) => void;
 }
 
 type DecoratedResponse = http.ServerResponse & {
@@ -125,6 +144,13 @@ export class StaticServer {
   private staticRealRoot: string | null = null;
   private apiRealRoot: string | null = null;
   private apiPrefix: string;
+  private apiMode: ApiMode;
+  private apiEntry: string | null = null;
+  private stripApiPrefix: boolean;
+  private apiProcess: ChildProcess | null = null;
+  private apiProxy: httpProxy | null = null;
+  private apiPort: number | null = null;
+  private stopping = false;
   private moduleCache = new Map<string, { mtimeMs: number; module: any }>();
 
   public port: number = 0;
@@ -138,6 +164,17 @@ export class StaticServer {
     let prefix = options.apiPrefix || '/api';
     if (!prefix.startsWith('/')) prefix = `/${prefix}`;
     this.apiPrefix = prefix.replace(/\/+$/, '') || '/api';
+
+    this.apiMode = options.apiMode === 'server' ? 'server' : 'handlers';
+    this.stripApiPrefix = options.stripApiPrefix !== false;
+
+    if (this.apiMode === 'server') {
+      this.apiEntry = options.apiEntry
+        ? path.resolve(options.apiEntry)
+        : this.apiRoot
+          ? path.join(this.apiRoot, 'index.js')
+          : null;
+    }
   }
 
   private prepareRoots(): void {
@@ -154,17 +191,146 @@ export class StaticServer {
       }
       this.apiRealRoot = fs.realpathSync(this.apiRoot);
     }
+
+    if (this.apiMode === 'server') {
+      if (!this.apiEntry) {
+        throw new Error('apiMode "server" requer a opção "api" ou "apiEntry".');
+      }
+      if (!fs.existsSync(this.apiEntry) || !fs.statSync(this.apiEntry).isFile()) {
+        throw new Error(`Arquivo de entrada da API não encontrado: "${this.apiEntry}".`);
+      }
+    }
   }
 
-  public start(): Promise<{ port: number; url: string; stop: () => void }> {
-    return new Promise((resolve, reject) => {
-      try {
-        this.prepareRoots();
-      } catch (err) {
-        reject(err);
+  private async startApiServer(): Promise<void> {
+    if (!this.apiEntry) {
+      throw new Error('apiMode "server" requer um arquivo de entrada.');
+    }
+
+    const port = await findFreePort();
+    this.apiPort = port;
+
+    const child = spawn(process.execPath, [this.apiEntry], {
+      cwd: process.cwd(),
+      env: {
+        ...process.env,
+        PORT: String(port),
+        CM_TUNNEL_API_PORT: String(port),
+      },
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+
+    this.apiProcess = child;
+    let output = '';
+    let exited = false;
+
+    const forward = (data: Buffer) => {
+      const text = data.toString();
+      output = `${output}${text}`.slice(-4000);
+      this.options.onLog?.(text);
+    };
+
+    child.stdout?.on('data', forward);
+    child.stderr?.on('data', forward);
+    child.once('exit', (code, signal) => {
+      exited = true;
+      if (!this.stopping) {
+        console.error(
+          `[cm-tunnel] A API encerrou inesperadamente (${code ?? signal}).`,
+        );
+      }
+    });
+
+    const timeoutMs = this.options.apiTimeout ?? 30000;
+    const deadline = Date.now() + timeoutMs;
+
+    while (Date.now() < deadline) {
+      if (exited) {
+        this.stopApiServer();
+        throw new Error(
+          `API encerrou antes de ficar pronta.\n${output}`.trim(),
+        );
+      }
+
+      if (await isPortInUse(port)) {
+        this.apiProxy = httpProxy.createProxyServer({
+          target: `http://127.0.0.1:${port}`,
+          ws: true,
+        });
+
+        this.apiProxy.on('error', (_err, _req, res) => {
+          const response = res as http.ServerResponse | undefined;
+          if (response && typeof response.writeHead === 'function' && !response.headersSent) {
+            response.writeHead(502, {
+              'Content-Type': 'application/json; charset=utf-8',
+            });
+            response.end(JSON.stringify({ error: 'Bad Gateway' }));
+          }
+        });
+
         return;
       }
 
+      await new Promise((resolveWait) => setTimeout(resolveWait, 100));
+    }
+
+    this.stopApiServer();
+    throw new Error(
+      `API não ficou pronta em ${timeoutMs / 1000}s.\n${output}`.trim(),
+    );
+  }
+
+  private stopApiServer(): void {
+    this.stopping = true;
+
+    if (this.apiProxy) {
+      try {
+        this.apiProxy.close();
+      } catch {
+        // ignora
+      }
+      this.apiProxy = null;
+    }
+
+    if (this.apiProcess) {
+      try {
+        this.apiProcess.kill();
+      } catch {
+        // ignora
+      }
+      this.apiProcess = null;
+    }
+
+    this.apiPort = null;
+  }
+
+  private rewriteApiUrl(url: string): string {
+    if (!this.stripApiPrefix) return url;
+    const rest = url.slice(this.apiPrefix.length);
+    return rest.startsWith('/') ? rest || '/' : `/${rest}`;
+  }
+
+  private handleApiServer(
+    req: http.IncomingMessage,
+    res: http.ServerResponse,
+  ): void {
+    if (!this.apiProxy || !this.apiPort) {
+      this.sendJson(res, 502, { error: 'API server not ready' });
+      return;
+    }
+
+    req.url = this.rewriteApiUrl(req.url || '/');
+    this.apiProxy.web(req, res);
+  }
+
+  public async start(): Promise<{ port: number; url: string; stop: () => void }> {
+    this.prepareRoots();
+
+    if (this.apiMode === 'server') {
+      await this.startApiServer();
+    }
+
+    return new Promise((resolve, reject) => {
       this.server = http.createServer((req, res) => {
         this.handle(req, res).catch((err) => {
           console.error('[cm-tunnel] Erro ao processar requisição:', err);
@@ -173,6 +339,19 @@ export class StaticServer {
           }
           res.end(JSON.stringify({ error: 'Internal Server Error' }));
         });
+      });
+
+      this.server.on('upgrade', (req, socket, head) => {
+        const url = req.url || '';
+        const isApi =
+          url === this.apiPrefix || url.startsWith(`${this.apiPrefix}/`);
+
+        if (this.apiMode === 'server' && this.apiProxy && isApi) {
+          req.url = this.rewriteApiUrl(url);
+          this.apiProxy.ws(req, socket, head);
+        } else {
+          socket.destroy();
+        }
       });
 
       this.server.on('error', reject);
@@ -203,7 +382,9 @@ export class StaticServer {
     }
 
     if (pathname === this.apiPrefix || pathname.startsWith(`${this.apiPrefix}/`)) {
-      if (this.apiRoot) {
+      if (this.apiMode === 'server') {
+        this.handleApiServer(req, res);
+      } else if (this.apiRoot) {
         await this.handleApi(req, res, pathname);
       } else {
         // /api é reservado: nunca cai no estático, mesmo sem pasta de API configurada.
@@ -460,6 +641,7 @@ export class StaticServer {
   }
 
   public stop() {
+    this.stopApiServer();
     if (this.server) {
       this.server.close();
       this.server = null;

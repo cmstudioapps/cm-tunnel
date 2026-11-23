@@ -37,6 +37,17 @@ const STARTER_API = `export default function handler(req, res) {
   res.json({ ok: true, method: req.method, time: new Date().toISOString() });
 }
 `;
+const STARTER_API_SERVER = `import http from 'node:http';
+
+const port = Number(process.env.PORT);
+
+const server = http.createServer((req, res) => {
+  res.setHeader('Content-Type', 'application/json');
+  res.end(JSON.stringify({ ok: true, url: req.url }));
+});
+
+server.listen(port, '127.0.0.1');
+`;
 function onCancel(s) {
     console.log(`\n${s.cancelled}`);
     process.exit(0);
@@ -69,7 +80,7 @@ async function askPort(s, message, initial) {
     }, { onCancel: () => onCancel(s) });
     return Number(res.value);
 }
-async function ensureFolder(s, lang, dir, kind, yes, dryRun) {
+async function ensureFolder(s, lang, dir, kind, yes, dryRun, apiMode = "handlers") {
     if (!dir)
         return;
     if (dryRun)
@@ -86,6 +97,9 @@ async function ensureFolder(s, lang, dir, kind, yes, dryRun) {
     mkdirSync(abs, { recursive: true });
     if (kind === "site") {
         writeFileSync(join(abs, "index.html"), starterHtml(lang));
+    }
+    else if (apiMode === "server") {
+        writeFileSync(join(abs, "index.js"), STARTER_API_SERVER);
     }
     else {
         writeFileSync(join(abs, "hello.js"), STARTER_API);
@@ -186,9 +200,44 @@ async function main() {
     const apiPath = target || mode === "site"
         ? undefined
         : await chooseFolder(s, "api", opts.api, saved?.api, opts.yes);
+    let apiMode;
+    let apiEntry;
+    if (!target && mode !== "site" && apiPath) {
+        const detectedEntry = ["index.js", "server.js", "app.js"]
+            .map((file) => join(apiPath, file))
+            .find((file) => existsSync(resolve(file)));
+        const suggestedApiMode = detectedEntry ? "server" : "handlers";
+        apiMode =
+            opts.apiMode ??
+                saved?.apiMode ??
+                (opts.yes
+                    ? suggestedApiMode
+                    : await askSelect(s, s.apiModePrompt, [
+                        { title: s.apiModeHandlers, value: "handlers" },
+                        { title: s.apiModeServer, value: "server" },
+                    ], suggestedApiMode === "server" ? 1 : 0));
+        if (apiMode === "server") {
+            const defaultEntry = opts.apiEntry ??
+                saved?.apiEntry ??
+                detectedEntry ??
+                join(apiPath, "index.js");
+            apiEntry =
+                opts.apiEntry ??
+                    saved?.apiEntry ??
+                    (opts.yes
+                        ? defaultEntry
+                        : await askText(s, s.apiEntryPrompt, defaultEntry));
+        }
+    }
     if (!target) {
-        await ensureFolder(s, lang, publicPath, "site", opts.yes, opts.dryRun);
-        await ensureFolder(s, lang, apiPath, "api", opts.yes, opts.dryRun);
+        await ensureFolder(s, lang, publicPath, "site", opts.yes, opts.dryRun, apiMode);
+        await ensureFolder(s, lang, apiPath, "api", opts.yes, opts.dryRun, apiMode);
+    }
+    if (apiMode === "server" &&
+        apiEntry &&
+        !opts.dryRun &&
+        !existsSync(resolve(apiEntry))) {
+        throw new Error(s.apiEntryInvalid(apiEntry));
     }
     let publish;
     if (opts.quick) {
@@ -257,6 +306,8 @@ async function main() {
         mode,
         public: publicPath,
         api: apiPath,
+        apiMode,
+        apiEntry,
         apiPrefix: normalizePrefix(opts.apiPrefix ?? saved?.apiPrefix),
         publish,
         domain,
@@ -272,7 +323,9 @@ async function main() {
             console.log(`  ${s.summarySite(publicPath)}`);
         }
         if (mode !== "site" && apiPath) {
-            console.log(`  ${s.summaryApi(apiPath, plan.apiPrefix)}`);
+            console.log(`  ${apiMode === "server"
+                ? s.summaryApiServer(apiPath, apiEntry ?? "")
+                : s.summaryApi(apiPath, plan.apiPrefix)}`);
         }
     }
     console.log(`  ${publish === "quick"
@@ -302,7 +355,7 @@ async function main() {
     }
     const tunnelOptions = buildTunnelOptions(plan, token);
     if (wantLogs) {
-        tunnelOptions.onLog = (chunk) => {
+        const logSink = (chunk) => {
             if (dashboard) {
                 dashboard.push(chunk);
             }
@@ -310,6 +363,10 @@ async function main() {
                 process.stdout.write(chunk);
             }
         };
+        tunnelOptions.onLog = logSink;
+        if (tunnelOptions.serve) {
+            tunnelOptions.serve.onLog = logSink;
+        }
     }
     if (dashboard) {
         dashboard.start();
@@ -339,7 +396,9 @@ async function main() {
                 console.log(`  ${s.siteServed(publicPath)}`);
             }
             if (mode !== "site" && apiPath) {
-                console.log(`  ${s.apiServed(apiPath, plan.apiPrefix)}`);
+                console.log(`  ${apiMode === "server"
+                    ? s.summaryApiServer(apiPath, apiEntry ?? "")
+                    : s.apiServed(apiPath, plan.apiPrefix)}`);
             }
         }
         if (publish === "domain" && domain && port) {

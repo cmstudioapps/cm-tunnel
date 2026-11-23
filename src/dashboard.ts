@@ -25,8 +25,14 @@ function truncate(text: string, width: number): string {
 function modeLabel(plan: Plan, s: (typeof STRINGS)[Lang]): string {
   if (plan.target) return s.dashboardModeTarget(plan.target);
   if (plan.mode === 'site') return s.dashboardModeSite;
-  if (plan.mode === 'api') return s.dashboardModeApi;
-  return s.dashboardModeBoth;
+  if (plan.mode === 'api') {
+    return plan.apiMode === 'server'
+      ? s.dashboardModeApiServer
+      : s.dashboardModeApi;
+  }
+  return plan.apiMode === 'server'
+    ? s.dashboardModeBothServer
+    : s.dashboardModeBoth;
 }
 
 function publishLabel(plan: Plan, s: (typeof STRINGS)[Lang]): string {

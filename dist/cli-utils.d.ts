@@ -1,4 +1,5 @@
 import type { TunnelOptions } from "./Tunnel.js";
+import type { ApiMode } from "./StaticServer.js";
 export type Lang = "pt" | "en";
 export type Mode = "site" | "api" | "both";
 export type PublishMode = "quick" | "domain";
@@ -14,6 +15,8 @@ export interface CliOptions {
     mode?: Mode;
     public?: string;
     api?: string;
+    apiMode?: ApiMode;
+    apiEntry?: string;
     apiPrefix?: string;
     target?: number;
     port?: number;
@@ -26,6 +29,10 @@ export interface Plan {
     mode: Mode;
     public?: string;
     api?: string;
+    /** handlers (padrão) ou server (Express/Fastify/http normal) */
+    apiMode?: ApiMode;
+    /** Arquivo de entrada quando apiMode = "server" */
+    apiEntry?: string;
     apiPrefix: string;
     publish: PublishMode;
     domain?: string;
@@ -44,6 +51,11 @@ export interface Strings {
     modeServer: string;
     publicPath: string;
     apiPath: string;
+    apiModePrompt: string;
+    apiModeHandlers: string;
+    apiModeServer: string;
+    apiEntryPrompt: string;
+    apiEntryInvalid: (entry: string) => string;
     serverPortPrompt: string;
     serverNotRunning: (port: number) => string;
     publishHow: string;
@@ -62,6 +74,7 @@ export interface Strings {
     summaryTitle: string;
     summarySite: (dir: string) => string;
     summaryApi: (dir: string, prefix: string) => string;
+    summaryApiServer: (dir: string, entry: string) => string;
     summaryServer: (port: number) => string;
     summaryPublishQuick: string;
     summaryPublishDomain: (domain: string) => string;
@@ -90,6 +103,8 @@ export interface Strings {
     doctorTokenMissing: string;
     doctorFolderOk: (dir: string) => string;
     doctorFolderMissing: (dir: string) => string;
+    doctorApiEntryOk: (entry: string) => string;
+    doctorApiEntryMissing: (entry: string) => string;
     doctorPortFree: (port: number) => string;
     doctorPortBusy: (port: number) => string;
     doctorTargetUp: (port: number) => string;
@@ -107,7 +122,9 @@ export interface Strings {
     dashboardUrl: (url: string) => string;
     dashboardModeSite: string;
     dashboardModeApi: string;
+    dashboardModeApiServer: string;
     dashboardModeBoth: string;
+    dashboardModeBothServer: string;
     dashboardModeTarget: (port: number) => string;
     dashboardPublishQuick: string;
     dashboardPublishDomain: (domain: string) => string;

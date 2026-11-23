@@ -24,9 +24,14 @@ function modeLabel(plan, s) {
         return s.dashboardModeTarget(plan.target);
     if (plan.mode === 'site')
         return s.dashboardModeSite;
-    if (plan.mode === 'api')
-        return s.dashboardModeApi;
-    return s.dashboardModeBoth;
+    if (plan.mode === 'api') {
+        return plan.apiMode === 'server'
+            ? s.dashboardModeApiServer
+            : s.dashboardModeApi;
+    }
+    return plan.apiMode === 'server'
+        ? s.dashboardModeBothServer
+        : s.dashboardModeBoth;
 }
 function publishLabel(plan, s) {
     if (plan.publish === 'quick')

@@ -1,5 +1,5 @@
 import type { TunnelOptions } from "./Tunnel.js";
-import type { ServeOptions } from "./StaticServer.js";
+import type { ApiMode, ServeOptions } from "./StaticServer.js";
 import { parseArgs } from "node:util";
 
 export type Lang = "pt" | "en";
@@ -18,6 +18,8 @@ export interface CliOptions {
   mode?: Mode;
   public?: string;
   api?: string;
+  apiMode?: ApiMode;
+  apiEntry?: string;
   apiPrefix?: string;
   target?: number;
   port?: number;
@@ -31,6 +33,10 @@ export interface Plan {
   mode: Mode;
   public?: string;
   api?: string;
+  /** handlers (padrão) ou server (Express/Fastify/http normal) */
+  apiMode?: ApiMode;
+  /** Arquivo de entrada quando apiMode = "server" */
+  apiEntry?: string;
   apiPrefix: string;
   publish: PublishMode;
   domain?: string;
@@ -50,6 +56,11 @@ export interface Strings {
   modeServer: string;
   publicPath: string;
   apiPath: string;
+  apiModePrompt: string;
+  apiModeHandlers: string;
+  apiModeServer: string;
+  apiEntryPrompt: string;
+  apiEntryInvalid: (entry: string) => string;
   serverPortPrompt: string;
   serverNotRunning: (port: number) => string;
   publishHow: string;
@@ -68,6 +79,7 @@ export interface Strings {
   summaryTitle: string;
   summarySite: (dir: string) => string;
   summaryApi: (dir: string, prefix: string) => string;
+  summaryApiServer: (dir: string, entry: string) => string;
   summaryServer: (port: number) => string;
   summaryPublishQuick: string;
   summaryPublishDomain: (domain: string) => string;
@@ -96,6 +108,8 @@ export interface Strings {
   doctorTokenMissing: string;
   doctorFolderOk: (dir: string) => string;
   doctorFolderMissing: (dir: string) => string;
+  doctorApiEntryOk: (entry: string) => string;
+  doctorApiEntryMissing: (entry: string) => string;
   doctorPortFree: (port: number) => string;
   doctorPortBusy: (port: number) => string;
   doctorTargetUp: (port: number) => string;
@@ -113,7 +127,9 @@ export interface Strings {
   dashboardUrl: (url: string) => string;
   dashboardModeSite: string;
   dashboardModeApi: string;
+  dashboardModeApiServer: string;
   dashboardModeBoth: string;
+  dashboardModeBothServer: string;
   dashboardModeTarget: (port: number) => string;
   dashboardPublishQuick: string;
   dashboardPublishDomain: (domain: string) => string;
@@ -139,6 +155,11 @@ export const STRINGS: Record<Lang, Strings> = {
     modeServer: "Servidor já rodando (informar a porta)",
     publicPath: "Pasta do site",
     apiPath: "Pasta da API",
+    apiModePrompt: "Como sua API funciona?",
+    apiModeHandlers: "Funções por arquivo (handlers)",
+    apiModeServer: "Servidor normal (Express, Fastify, Node)",
+    apiEntryPrompt: "Arquivo de entrada da API",
+    apiEntryInvalid: (entry) => `Arquivo de entrada inválido: ${entry}`,
     serverPortPrompt: "Porta em que seu servidor já está rodando",
     serverNotRunning: (port) =>
       `Aviso: nada parece estar escutando na porta ${port} ainda.`,
@@ -159,6 +180,7 @@ export const STRINGS: Record<Lang, Strings> = {
     summaryTitle: "Resumo:",
     summarySite: (dir) => `Site:  ${dir}`,
     summaryApi: (dir, prefix) => `API:   ${dir} em ${prefix}`,
+    summaryApiServer: (dir, entry) => `API:   ${dir} (servidor: ${entry})`,
     summaryServer: (port) => `Servidor: http://localhost:${port}`,
     summaryPublishQuick: "Modo:  URL temporária (trycloudflare.com)",
     summaryPublishDomain: (domain) => `Modo:  Domínio próprio (${domain})`,
@@ -192,6 +214,8 @@ export const STRINGS: Record<Lang, Strings> = {
       "Token: ausente. Defina CLOUDFLARE_TOKEN no .env ou no ambiente.",
     doctorFolderOk: (dir) => `Pasta ${dir}: ok`,
     doctorFolderMissing: (dir) => `Pasta ${dir}: não encontrada`,
+    doctorApiEntryOk: (entry) => `Entry da API: ${entry} ok`,
+    doctorApiEntryMissing: (entry) => `Entry da API: ${entry} não encontrado`,
     doctorPortFree: (port) => `Porta ${port}: livre`,
     doctorPortBusy: (port) => `Porta ${port}: em uso (escolha outra com --port)`,
     doctorTargetUp: (port) => `Servidor em localhost:${port}: respondendo`,
@@ -213,13 +237,15 @@ export const STRINGS: Record<Lang, Strings> = {
     dashboardUrl: (url) => `URL:   ${url}`,
     dashboardModeSite: "Site",
     dashboardModeApi: "API",
+    dashboardModeApiServer: "API (servidor)",
     dashboardModeBoth: "Site + API",
+    dashboardModeBothServer: "Site + API (servidor)",
     dashboardModeTarget: (port) => `Servidor http://localhost:${port}`,
     dashboardPublishQuick: "URL temporária",
     dashboardPublishDomain: (domain) => `Domínio ${domain}`,
     dashboardLocal: (value) => `Local: ${value}`,
     dashboardAwaitingLocal: "Local: aguardando...",
-    dashboardLogs: "Logs (cloudflared)",
+    dashboardLogs: "Logs",
     dashboardWaitingLogs: "(aguardando logs...)",
     dashboardCtrlC: "Ctrl+C para encerrar",
     dashboardNoTty:
@@ -238,6 +264,11 @@ export const STRINGS: Record<Lang, Strings> = {
     modeServer: "Server already running (enter its port)",
     publicPath: "Site folder",
     apiPath: "API folder",
+    apiModePrompt: "How does your API work?",
+    apiModeHandlers: "File-based handlers",
+    apiModeServer: "Regular server (Express, Fastify, Node)",
+    apiEntryPrompt: "API entry file",
+    apiEntryInvalid: (entry) => `Invalid entry file: ${entry}`,
     serverPortPrompt: "Port your server is already running on",
     serverNotRunning: (port) =>
       `Warning: nothing seems to be listening on port ${port} yet.`,
@@ -258,6 +289,7 @@ export const STRINGS: Record<Lang, Strings> = {
     summaryTitle: "Summary:",
     summarySite: (dir) => `Site:  ${dir}`,
     summaryApi: (dir, prefix) => `API:   ${dir} at ${prefix}`,
+    summaryApiServer: (dir, entry) => `API:   ${dir} (server: ${entry})`,
     summaryServer: (port) => `Server: http://localhost:${port}`,
     summaryPublishQuick: "Mode:  Temporary URL (trycloudflare.com)",
     summaryPublishDomain: (domain) => `Mode:  Custom domain (${domain})`,
@@ -290,6 +322,8 @@ export const STRINGS: Record<Lang, Strings> = {
       "Token: missing. Set CLOUDFLARE_TOKEN in .env or the environment.",
     doctorFolderOk: (dir) => `Folder ${dir}: ok`,
     doctorFolderMissing: (dir) => `Folder ${dir}: not found`,
+    doctorApiEntryOk: (entry) => `API entry: ${entry} ok`,
+    doctorApiEntryMissing: (entry) => `API entry: ${entry} not found`,
     doctorPortFree: (port) => `Port ${port}: free`,
     doctorPortBusy: (port) => `Port ${port}: in use (choose another with --port)`,
     doctorTargetUp: (port) => `Server at localhost:${port}: responding`,
@@ -311,13 +345,15 @@ export const STRINGS: Record<Lang, Strings> = {
     dashboardUrl: (url) => `URL:   ${url}`,
     dashboardModeSite: "Site",
     dashboardModeApi: "API",
+    dashboardModeApiServer: "API (server)",
     dashboardModeBoth: "Site + API",
+    dashboardModeBothServer: "Site + API (server)",
     dashboardModeTarget: (port) => `Server http://localhost:${port}`,
     dashboardPublishQuick: "Temporary URL",
     dashboardPublishDomain: (domain) => `Domain ${domain}`,
     dashboardLocal: (value) => `Local: ${value}`,
     dashboardAwaitingLocal: "Local: waiting...",
-    dashboardLogs: "Logs (cloudflared)",
+    dashboardLogs: "Logs",
     dashboardWaitingLogs: "(waiting for logs...)",
     dashboardCtrlC: "Ctrl+C to stop",
     dashboardNoTty:
@@ -341,6 +377,8 @@ Opções:
   --mode site|api|both     O que publicar
   --public <pasta>         Pasta do site (padrão: public)
   --api <pasta>            Pasta da API (padrão: api)
+  --api-mode handlers|server  Como a API funciona (padrão: handlers)
+  --api-entry <arquivo>    Entrypoint no modo server (padrão: api/index.js)
   --api-prefix <prefixo>   Prefixo da API (padrão: /api)
   --target <porta>         Tunelar um servidor que já está rodando
   --port <porta>           Porta local (modo pastas + domínio)
@@ -369,6 +407,8 @@ Options:
   --mode site|api|both     What to publish
   --public <folder>        Site folder (default: public)
   --api <folder>           API folder (default: api)
+  --api-mode handlers|server  How the API works (default: handlers)
+  --api-entry <file>       Entrypoint in server mode (default: api/index.js)
   --api-prefix <prefix>    API prefix (default: /api)
   --target <port>          Tunnel an already running server
   --port <port>            Local port (folders + domain mode)
@@ -408,6 +448,8 @@ export function parseCliArgs(argv: string[]): CliOptions {
       mode: { type: "string" },
       public: { type: "string" },
       api: { type: "string" },
+      "api-mode": { type: "string" },
+      "api-entry": { type: "string" },
       "api-prefix": { type: "string" },
       target: { type: "string" },
       port: { type: "string" },
@@ -439,6 +481,11 @@ export function parseCliArgs(argv: string[]): CliOptions {
     throw new Error(`Invalid --lang: "${lang}". Use pt or en.`);
   }
 
+  const apiMode = values["api-mode"];
+  if (apiMode !== undefined && apiMode !== "handlers" && apiMode !== "server") {
+    throw new Error(`Invalid --api-mode: "${apiMode}". Use handlers or server.`);
+  }
+
   const command = positionals[0];
   if (command !== undefined && command !== "doctor" && command !== "dashboard") {
     throw new Error(`Unknown command: "${command}". Use doctor or dashboard.`);
@@ -455,6 +502,8 @@ export function parseCliArgs(argv: string[]): CliOptions {
     mode: mode as Mode | undefined,
     public: values.public,
     api: values.api,
+    apiMode: apiMode as ApiMode | undefined,
+    apiEntry: values["api-entry"],
     apiPrefix: values["api-prefix"],
     target,
     port,
@@ -523,6 +572,10 @@ export function buildTunnelOptions(
 
   if (plan.mode !== "api") serve.public = plan.public;
   if (plan.mode !== "site") serve.api = plan.api;
+  if (plan.mode !== "site" && plan.apiMode === "server") {
+    serve.apiMode = "server";
+    serve.apiEntry = plan.apiEntry;
+  }
   if (plan.publish === "domain" && plan.port) serve.port = plan.port;
 
   const options: TunnelOptions = {

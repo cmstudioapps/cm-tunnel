@@ -2,6 +2,9 @@ import http from 'http';
 import fs from 'fs';
 import path from 'path';
 import { pathToFileURL } from 'url';
+import { spawn } from 'child_process';
+import httpProxy from 'http-proxy';
+import { findFreePort, isPortInUse } from './net-utils.js';
 const API_EXTENSIONS = ['.js', '.mjs', '.cjs'];
 const MIME_TYPES = {
     '.html': 'text/html; charset=utf-8',
@@ -83,6 +86,13 @@ export class StaticServer {
     staticRealRoot = null;
     apiRealRoot = null;
     apiPrefix;
+    apiMode;
+    apiEntry = null;
+    stripApiPrefix;
+    apiProcess = null;
+    apiProxy = null;
+    apiPort = null;
+    stopping = false;
     moduleCache = new Map();
     port = 0;
     url = '';
@@ -95,6 +105,15 @@ export class StaticServer {
         if (!prefix.startsWith('/'))
             prefix = `/${prefix}`;
         this.apiPrefix = prefix.replace(/\/+$/, '') || '/api';
+        this.apiMode = options.apiMode === 'server' ? 'server' : 'handlers';
+        this.stripApiPrefix = options.stripApiPrefix !== false;
+        if (this.apiMode === 'server') {
+            this.apiEntry = options.apiEntry
+                ? path.resolve(options.apiEntry)
+                : this.apiRoot
+                    ? path.join(this.apiRoot, 'index.js')
+                    : null;
+        }
     }
     prepareRoots() {
         if (this.staticRoot) {
@@ -109,16 +128,116 @@ export class StaticServer {
             }
             this.apiRealRoot = fs.realpathSync(this.apiRoot);
         }
-    }
-    start() {
-        return new Promise((resolve, reject) => {
-            try {
-                this.prepareRoots();
+        if (this.apiMode === 'server') {
+            if (!this.apiEntry) {
+                throw new Error('apiMode "server" requer a opção "api" ou "apiEntry".');
             }
-            catch (err) {
-                reject(err);
+            if (!fs.existsSync(this.apiEntry) || !fs.statSync(this.apiEntry).isFile()) {
+                throw new Error(`Arquivo de entrada da API não encontrado: "${this.apiEntry}".`);
+            }
+        }
+    }
+    async startApiServer() {
+        if (!this.apiEntry) {
+            throw new Error('apiMode "server" requer um arquivo de entrada.');
+        }
+        const port = await findFreePort();
+        this.apiPort = port;
+        const child = spawn(process.execPath, [this.apiEntry], {
+            cwd: process.cwd(),
+            env: {
+                ...process.env,
+                PORT: String(port),
+                CM_TUNNEL_API_PORT: String(port),
+            },
+            stdio: ['ignore', 'pipe', 'pipe'],
+        });
+        this.apiProcess = child;
+        let output = '';
+        let exited = false;
+        const forward = (data) => {
+            const text = data.toString();
+            output = `${output}${text}`.slice(-4000);
+            this.options.onLog?.(text);
+        };
+        child.stdout?.on('data', forward);
+        child.stderr?.on('data', forward);
+        child.once('exit', (code, signal) => {
+            exited = true;
+            if (!this.stopping) {
+                console.error(`[cm-tunnel] A API encerrou inesperadamente (${code ?? signal}).`);
+            }
+        });
+        const timeoutMs = this.options.apiTimeout ?? 30000;
+        const deadline = Date.now() + timeoutMs;
+        while (Date.now() < deadline) {
+            if (exited) {
+                this.stopApiServer();
+                throw new Error(`API encerrou antes de ficar pronta.\n${output}`.trim());
+            }
+            if (await isPortInUse(port)) {
+                this.apiProxy = httpProxy.createProxyServer({
+                    target: `http://127.0.0.1:${port}`,
+                    ws: true,
+                });
+                this.apiProxy.on('error', (_err, _req, res) => {
+                    const response = res;
+                    if (response && typeof response.writeHead === 'function' && !response.headersSent) {
+                        response.writeHead(502, {
+                            'Content-Type': 'application/json; charset=utf-8',
+                        });
+                        response.end(JSON.stringify({ error: 'Bad Gateway' }));
+                    }
+                });
                 return;
             }
+            await new Promise((resolveWait) => setTimeout(resolveWait, 100));
+        }
+        this.stopApiServer();
+        throw new Error(`API não ficou pronta em ${timeoutMs / 1000}s.\n${output}`.trim());
+    }
+    stopApiServer() {
+        this.stopping = true;
+        if (this.apiProxy) {
+            try {
+                this.apiProxy.close();
+            }
+            catch {
+                // ignora
+            }
+            this.apiProxy = null;
+        }
+        if (this.apiProcess) {
+            try {
+                this.apiProcess.kill();
+            }
+            catch {
+                // ignora
+            }
+            this.apiProcess = null;
+        }
+        this.apiPort = null;
+    }
+    rewriteApiUrl(url) {
+        if (!this.stripApiPrefix)
+            return url;
+        const rest = url.slice(this.apiPrefix.length);
+        return rest.startsWith('/') ? rest || '/' : `/${rest}`;
+    }
+    handleApiServer(req, res) {
+        if (!this.apiProxy || !this.apiPort) {
+            this.sendJson(res, 502, { error: 'API server not ready' });
+            return;
+        }
+        req.url = this.rewriteApiUrl(req.url || '/');
+        this.apiProxy.web(req, res);
+    }
+    async start() {
+        this.prepareRoots();
+        if (this.apiMode === 'server') {
+            await this.startApiServer();
+        }
+        return new Promise((resolve, reject) => {
             this.server = http.createServer((req, res) => {
                 this.handle(req, res).catch((err) => {
                     console.error('[cm-tunnel] Erro ao processar requisição:', err);
@@ -127,6 +246,17 @@ export class StaticServer {
                     }
                     res.end(JSON.stringify({ error: 'Internal Server Error' }));
                 });
+            });
+            this.server.on('upgrade', (req, socket, head) => {
+                const url = req.url || '';
+                const isApi = url === this.apiPrefix || url.startsWith(`${this.apiPrefix}/`);
+                if (this.apiMode === 'server' && this.apiProxy && isApi) {
+                    req.url = this.rewriteApiUrl(url);
+                    this.apiProxy.ws(req, socket, head);
+                }
+                else {
+                    socket.destroy();
+                }
             });
             this.server.on('error', reject);
             const targetPort = this.options.port || 0;
@@ -154,7 +284,10 @@ export class StaticServer {
             return;
         }
         if (pathname === this.apiPrefix || pathname.startsWith(`${this.apiPrefix}/`)) {
-            if (this.apiRoot) {
+            if (this.apiMode === 'server') {
+                this.handleApiServer(req, res);
+            }
+            else if (this.apiRoot) {
                 await this.handleApi(req, res, pathname);
             }
             else {
@@ -376,6 +509,7 @@ export class StaticServer {
         res.end(JSON.stringify(body));
     }
     stop() {
+        this.stopApiServer();
         if (this.server) {
             this.server.close();
             this.server = null;

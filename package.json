@@ -1,6 +1,6 @@
 {
   "name": "cm-tunnel",
-  "version": "1.6.0",
+  "version": "1.7.0",
   "description": "Exponha seu servidor HTTP local para a internet através do Cloudflare ou LocalTunnel de forma simples",
   "type": "module",
   "main": "./dist/index.js",

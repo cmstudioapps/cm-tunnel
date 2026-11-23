@@ -7,6 +7,9 @@ import tunnel from "../src/index.js";
 
 const publicDir = fileURLToPath(new URL("./fixtures/public", import.meta.url));
 const apiDir = fileURLToPath(new URL("./fixtures/api", import.meta.url));
+const apiServerDir = fileURLToPath(
+  new URL("./fixtures/api-server", import.meta.url),
+);
 const dotEnvFixture = join(publicDir, ".env");
 
 beforeAll(() => {
@@ -200,5 +203,68 @@ describe("StaticServer", () => {
       const api = await request(server.url, "/api/hello");
       expect(api.status).toBe(404);
     });
+  });
+});
+
+describe("StaticServer — API em modo server", () => {
+  it("deve rodar um servidor normal e proxiar /api", async () => {
+    await withServer(
+      { public: publicDir, api: apiServerDir, apiMode: "server" },
+      async (server) => {
+        const hello = await request(server.url, "/api/hello");
+        expect(hello.status).toBe(200);
+        expect(JSON.parse(hello.body)).toEqual({ ok: true, url: "/hello" });
+
+        const index = await request(server.url, "/");
+        expect(index.status).toBe(200);
+        expect(index.body).toContain("Página pública");
+      },
+    );
+  });
+
+  it("deve manter o prefixo quando stripApiPrefix = false", async () => {
+    await withServer(
+      { api: apiServerDir, apiMode: "server", stripApiPrefix: false },
+      async (server) => {
+        const echo = await request(server.url, "/api/echo?x=1");
+        expect(JSON.parse(echo.body)).toEqual({ url: "/api/echo?x=1" });
+      },
+    );
+  });
+
+  it("deve funcionar só com servidor de API", async () => {
+    await withServer({ api: apiServerDir, apiMode: "server" }, async (server) => {
+      const root = await request(server.url, "/");
+      expect(root.status).toBe(404);
+
+      const hello = await request(server.url, "/api/hello");
+      expect(hello.status).toBe(200);
+    });
+  });
+
+  it("deve rejeitar entry inexistente", async () => {
+    await expect(
+      tunnel.serve({
+        api: apiServerDir,
+        apiMode: "server",
+        apiEntry: join(apiServerDir, "nao-existe.js"),
+      }),
+    ).rejects.toThrow("não encontrado");
+  });
+
+  it("deve rejeitar quando o app de API encerra", async () => {
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      await expect(
+        tunnel.serve({
+          api: apiServerDir,
+          apiMode: "server",
+          apiEntry: join(apiServerDir, "bad.js"),
+          apiTimeout: 2000,
+        }),
+      ).rejects.toThrow("API encerrou");
+    } finally {
+      spy.mockRestore();
+    }
   });
 });

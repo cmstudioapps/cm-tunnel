@@ -1,7 +1,7 @@
 import { spawnSync } from 'node:child_process';
 import { promises as dns } from 'node:dns';
 import { existsSync, statSync } from 'node:fs';
-import { resolve } from 'node:path';
+import { join, resolve } from 'node:path';
 import { CONFIG_FILE, loadConfig, loadDotEnv } from './config.js';
 import { STRINGS } from './cli-utils.js';
 import { isPortFree, isPortInUse } from './net-utils.js';
@@ -89,8 +89,28 @@ export async function runDoctor(lang) {
             };
             if (plan.mode !== 'api')
                 checkFolder(plan.public);
-            if (plan.mode !== 'site')
-                checkFolder(plan.api);
+            if (plan.mode !== 'site') {
+                if (plan.apiMode === 'server') {
+                    if (plan.api)
+                        checkFolder(plan.api);
+                    const entry = plan.apiEntry ?? (plan.api ? join(plan.api, 'index.js') : undefined);
+                    if (entry) {
+                        const abs = resolve(entry);
+                        if (existsSync(abs) && statSync(abs).isFile()) {
+                            okLine(s.doctorApiEntryOk(entry));
+                        }
+                        else {
+                            failLine(s.doctorApiEntryMissing(entry));
+                        }
+                    }
+                    else {
+                        failLine(s.doctorApiEntryMissing('?'));
+                    }
+                }
+                else {
+                    checkFolder(plan.api);
+                }
+            }
         }
         if (plan.target) {
             if (await isPortInUse(plan.target)) {

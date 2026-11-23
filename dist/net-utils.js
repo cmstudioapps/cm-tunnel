@@ -1,4 +1,21 @@
 import { createConnection, createServer } from 'node:net';
+/** Retorna uma porta livre em 127.0.0.1. */
+export function findFreePort() {
+    return new Promise((resolvePort, reject) => {
+        const server = createServer();
+        server.once('error', reject);
+        server.listen(0, '127.0.0.1', () => {
+            const address = server.address();
+            if (address && typeof address !== 'string') {
+                const port = address.port;
+                server.close(() => resolvePort(port));
+                return;
+            }
+            server.close();
+            reject(new Error('Não foi possível obter uma porta livre.'));
+        });
+    });
+}
 /** Retorna true se a porta está livre para um novo servidor. */
 export function isPortFree(port) {
     return new Promise((resolvePort) => {

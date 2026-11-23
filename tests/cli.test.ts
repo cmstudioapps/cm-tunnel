@@ -82,6 +82,23 @@ describe("CLI — parse de flags", () => {
     expect(parseCliArgs(["--logs"]).logs).toBe(true);
     expect(parseCliArgs(["--verbose"]).logs).toBe(true);
   });
+
+  it("aceita --api-mode e --api-entry", () => {
+    const opts = parseCliArgs([
+      "--api-mode",
+      "server",
+      "--api-entry",
+      "api/index.js",
+    ]);
+    expect(opts.apiMode).toBe("server");
+    expect(opts.apiEntry).toBe("api/index.js");
+  });
+
+  it("rejeita --api-mode inválido", () => {
+    expect(() => parseCliArgs(["--api-mode", "nada"])).toThrow(
+      "Invalid --api-mode",
+    );
+  });
 });
 
 describe("CLI — normalização", () => {
@@ -203,6 +220,23 @@ describe("CLI — opções do túnel", () => {
       mode: "named",
       domain: "api.exemplo.com",
       token: "token-123",
+    });
+  });
+
+  it("monta API em modo server", () => {
+    const options = buildTunnelOptions({
+      ...base,
+      apiMode: "server",
+      apiEntry: "api/index.js",
+      publish: "quick",
+    });
+
+    expect(options.serve).toEqual({
+      public: "public",
+      api: "api",
+      apiMode: "server",
+      apiEntry: "api/index.js",
+      apiPrefix: "/api",
     });
   });
 });
