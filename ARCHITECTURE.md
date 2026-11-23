@@ -400,6 +400,10 @@ npm view cm-tunnel version    # confirme a versão publicada
 > pasta do projeto. Isso criou `"cm-tunnel": "^1.5.0"` nas dependências e uma cópia
 > em `node_modules/cm-tunnel`. O guard `check:self` existe para impedir que volte.
 > A 1.7.0 publicada ainda contém esse erro; a 1.7.1+ corrige.
+>
+> **Incidente 1.8.0:** a 1.8.0 foi publicada antes dos fixes de concorrência/IP no
+> RateLimiter, do `domain` no ngrok e do log do supervisor. Como o npm não permite
+> republicar a mesma versão, a **1.8.1** é a versão correta a instalar.
 
 ---
 
